@@ -1,0 +1,43 @@
+# Every tier of tests/run-tests.sh on a machine that is not the author's, on the
+# oldest and the newest supported Python, then the install story: a venv,
+# pip install ., the command answers --version and writes a page from one
+# report. Chrome is on the runner image, so the browser tier runs too — and
+# it must: NaN in an SVG attribute is caught only there, so a runner without
+# Chrome fails the job rather than skipping the tier. systemd-run is not on
+# the image, and run-tests.sh runs the tiers uncapped then.
+name: bench-drift
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    name: python ${{ matrix.python }} · node 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: versions
+        run: python3 --version && node --version && google-chrome --version
+      - name: tests (all tiers)
+        run: tests/run-tests.sh
+      - name: install smoke test
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet .
+          got="$("$RUNNER_TEMP/venv/bin/bench-drift" --version)"
+          test "$got" = "bench-drift 0.1.0" || { echo "got: $got"; exit 1; }
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/venv/bin/bench-drift" --board qemu-x86_64="$GITHUB_WORKSPACE/tests/real_sample.json" -o page.html
+          grep -q 'window.BENCH_DRIFT_DATA=' page.html

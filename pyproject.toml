@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bench-drift"
+description = "A dashboard out of folders of Google Benchmark reports, with a regression detector in the browser"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+dynamic = ["version"]
+
+[project.scripts]
+bench-drift = "bench_drift:main"
+
+[tool.setuptools]
+packages = ["bench_drift"]
+
+[tool.setuptools.dynamic]
+version = {attr = "bench_drift.__version__"}
+
+[tool.setuptools.package-data]
+bench_drift = ["bench-drift.html"]

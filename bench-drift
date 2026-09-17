@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""bench-drift: a dashboard out of a folder of Google Benchmark reports."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from bench_drift import main
+raise SystemExit(main())

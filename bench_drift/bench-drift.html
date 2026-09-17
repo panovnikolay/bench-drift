@@ -1,0 +1,1217 @@
+<title>bench-drift</title>
+<style>
+:root{
+  color-scheme: light;
+  --plane:#ebeeec; --surface:#fbfcfb; --well:#f3f6f4; --raised:#ffffff;
+  --ink:#111614; --ink2:#4b534f; --muted:#7c8582;
+  --rule:#dbdfdd; --rule-2:#c6ccc9;
+  --accent:#2a78d6; --accent-ink:#1c5cab; --accent-soft:rgba(42,120,214,.13); --accent-band:rgba(42,120,214,.16);
+  --good:#0ca30c; --good-ink:#006300; --warn:#fab219;
+  --crit:#d03b3b; --crit-ink:#a32424;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  --chip:rgba(17,22,20,.055); --shadow:0 1px 2px rgba(17,22,20,.05), 0 10px 28px -16px rgba(17,22,20,.30);
+  --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cond:"IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --plane:#0a0c0b; --surface:#151918; --well:#0f1312; --raised:#1b201e;
+    --ink:#eff3f1; --ink2:#b4bcb8; --muted:#7c8582;
+    --rule:#242a28; --rule-2:#333a37;
+    --accent:#3987e5; --accent-ink:#96c1f3; --accent-soft:rgba(57,135,229,.17); --accent-band:rgba(57,135,229,.20);
+    --good:#0ca30c; --good-ink:#3fc23f; --warn:#fab219;
+    --crit:#d03b3b; --crit-ink:#ef7272;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --chip:rgba(255,255,255,.07); --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --plane:#0a0c0b; --surface:#151918; --well:#0f1312; --raised:#1b201e;
+  --ink:#eff3f1; --ink2:#b4bcb8; --muted:#7c8582;
+  --rule:#242a28; --rule-2:#333a37;
+  --accent:#3987e5; --accent-ink:#96c1f3; --accent-soft:rgba(57,135,229,.17); --accent-band:rgba(57,135,229,.20);
+  --good:#0ca30c; --good-ink:#3fc23f; --warn:#fab219;
+  --crit:#d03b3b; --crit-ink:#ef7272;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --chip:rgba(255,255,255,.07); --shadow:0 1px 2px rgba(0,0,0,.5), 0 10px 28px -16px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{background:var(--plane); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.45; -webkit-font-smoothing:antialiased;}
+.shell{max-width:1500px; margin:0 auto; padding-inline:16px; padding-block:16px 40px; display:flex; flex-direction:column; gap:14px;}
+h1,h2,h3{margin:0; text-wrap:balance;}
+button,input,textarea,select{font:inherit; color:inherit;}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px;}
+.mono{font-family:var(--mono); font-variant-numeric:tabular-nums;}
+.lbl{font-family:var(--cond); font-weight:600; font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted);}
+.up{color:var(--crit-ink);} .down{color:var(--good-ink);} .flat{color:var(--muted);}
+
+/* ---------- masthead ---------- */
+.mast{display:flex; flex-wrap:wrap; align-items:flex-end; gap:14px 22px; padding-bottom:12px; border-bottom:1px solid var(--rule-2);}
+.mast .title{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
+.mast h1{font-family:var(--cond); font-weight:600; font-size:22px; letter-spacing:-.01em;}
+.mast .spacer{flex:1 1 30px;}
+.readout{display:flex; gap:18px; flex-wrap:wrap; align-items:flex-end;}
+.readout > div{display:flex; flex-direction:column; gap:1px;}
+.readout b{font-family:var(--mono); font-weight:500; font-size:13px; color:var(--ink2);}
+select#basesel, select#winsel, select#basewin, select#boardsel, select#thrsel{background:var(--surface); border:1px solid var(--rule-2); border-radius:2px; padding:3px 6px; font-family:var(--mono); font-size:12.5px;}
+
+/* ---------- panels ---------- */
+.panel{background:var(--surface); border:1px solid var(--rule); border-radius:2px;}
+.panel > header{display:flex; align-items:center; gap:10px; padding:9px 12px; border-bottom:1px solid var(--rule); flex-wrap:wrap;}
+.panel > header h2{font-family:var(--cond); font-weight:600; font-size:12px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink2);}
+.panel > header .grow{flex:1;}
+.seg{display:flex; border:1px solid var(--rule-2); border-radius:2px; overflow:hidden;}
+.seg button{background:transparent; border:0; padding:4px 9px; font-size:11.5px; color:var(--ink2); cursor:pointer; white-space:nowrap;}
+.seg button+button{border-left:1px solid var(--rule-2);}
+.seg button[aria-pressed="true"]{background:var(--accent); color:#fff;}
+
+/* ---------- chart box ---------- */
+.chartbox{position:relative; padding:6px 12px 2px;}
+.chartbox.wide{overflow-x:auto;}
+.chartbox.wide svg{min-width:1200px;}
+.heatscroll{max-height:396px; overflow-y:auto; overscroll-behavior:contain; border-top:1px solid var(--rule);}
+.chartbox svg{display:block; width:100%; height:auto;}
+.legend{display:flex; flex-wrap:wrap; gap:6px 16px; padding:2px 14px 11px; font-size:11.5px; color:var(--ink2);}
+.legend span{display:inline-flex; align-items:center; gap:6px;}
+.key{width:14px; height:0; border-top-width:2px; border-top-style:solid; display:inline-block;}
+.key.sw{height:10px; border:0; border-radius:1px;}
+
+/* ---------- layout ---------- */
+.main{display:grid; grid-template-columns:minmax(0,376px) minmax(0,1fr); gap:14px; align-items:start;}
+@media (max-width:1080px){ .main{grid-template-columns:1fr;} }
+
+/* ---------- browser (virtualised) ---------- */
+.srch{display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid var(--rule); flex-wrap:wrap; align-items:center;}
+.srch input{flex:1 1 150px; min-width:0; background:var(--well); border:1px solid var(--rule-2); border-radius:2px; padding:5px 8px; font-family:var(--mono); font-size:12px;}
+.chips{display:flex; gap:5px; padding:8px 10px; flex-wrap:wrap; border-bottom:1px solid var(--rule);}
+.chip .cdot{width:7px; height:7px; border-radius:50%; flex:0 0 7px;}
+.chip[aria-pressed="true"] .cdot{box-shadow:0 0 0 1px rgba(255,255,255,.6);}
+.chip{background:var(--chip); border:1px solid transparent; border-radius:2px; padding:2px 8px; font-size:11.5px; cursor:pointer; color:var(--ink2); display:inline-flex; gap:6px; align-items:center;}
+.chip .n{font-family:var(--mono); font-size:11px; color:var(--muted);}
+.chip[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#fff;}
+.chip[aria-pressed="true"] .n{color:rgba(255,255,255,.8);}
+.vp{position:relative; height:660px; overflow-y:auto; overflow-x:hidden; contain:strict;}
+.vp .inner{position:relative; width:100%;}
+.vrow{position:absolute; left:0; right:0; display:grid; grid-template-columns:3px minmax(0,1fr) auto; gap:0 10px; align-items:center;
+  border-bottom:1px solid var(--rule); background:transparent; border-left:0; border-right:0; border-top:0; padding:0; text-align:left; cursor:pointer; font:inherit; color:inherit; height:46px;}
+.vrow:hover{background:var(--well);}
+.vrow[aria-current="true"]{background:var(--accent-soft);}
+.vrow .stripe{height:100%; background:var(--rule-2);}
+.vrow .meta{min-width:0; padding:4px 0;}
+.vrow .nm{display:block; min-width:0; font-family:var(--mono); font-size:11.5px; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.vrow .sm{display:block; min-width:0; font-size:10.5px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.vrow .right{display:flex; align-items:center; gap:8px; padding-right:10px; flex:0 0 auto;}
+.vrow .delta{font-family:var(--mono); font-size:12px; font-weight:500; min-width:56px; text-align:right;}
+.vgrp{position:absolute; left:0; right:0; height:32px; display:flex; align-items:center; gap:8px; padding:0 10px;
+  background:var(--well); border-bottom:1px solid var(--rule); border-top:1px solid var(--rule); cursor:pointer; font:inherit; color:inherit; text-align:left; width:100%;}
+.vgrp .fam{min-width:0; flex:0 1 auto; font-family:var(--mono); font-size:11.5px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.vgrp .cnt{font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-left:auto; white-space:nowrap; flex:0 0 auto;}
+.vgrp .bar{display:flex; height:8px; width:64px; border-radius:1px; overflow:hidden; flex:0 0 64px; background:var(--rule-2);}
+.vgrp .caret{color:var(--muted); font-size:10px; flex:0 0 9px;}
+.noneMsg{padding:24px 14px; color:var(--muted); font-size:12.5px;}
+
+/* ---------- trace ---------- */
+.tracehead{display:flex; flex-wrap:wrap; gap:6px 16px; align-items:baseline; padding:12px 14px 10px;}
+.tracehead .bn{font-family:var(--mono); font-size:14.5px; font-weight:500; word-break:break-all;}
+.tracehead .hero{margin-left:auto; display:flex; align-items:baseline; gap:18px;}
+.tracehead .big{font-size:30px; font-weight:450; letter-spacing:-.02em;}
+.famlink{background:none; border:0; padding:0; color:var(--accent-ink); cursor:pointer; font-size:11.5px; text-decoration:underline; text-underline-offset:2px;}
+.facts{display:flex; flex-wrap:wrap; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule); background:var(--well);}
+.facts div{padding:7px 14px; border-right:1px solid var(--rule); display:flex; flex-direction:column; gap:1px;}
+.facts b{font-family:var(--mono); font-weight:500; font-size:12.5px;}
+.plotwrap{position:relative; padding:10px 12px 4px;}
+.plotwrap svg{display:block; width:100%; height:auto; max-width:100%;}
+.tip{position:absolute; pointer-events:none; background:var(--raised); border:1px solid var(--rule-2); border-radius:2px; box-shadow:var(--shadow); padding:8px 10px; font-size:11.5px; min-width:196px; opacity:0; transition:opacity .09s; z-index:5;}
+.tip.on{opacity:1;}
+.tip .r{display:flex; justify-content:space-between; gap:14px;}
+.tip .r b{font-family:var(--mono); font-weight:500;}
+.tip hr{border:0; border-top:1px solid var(--rule); margin:5px 0;}
+
+table.dt{width:100%; border-collapse:collapse; font-size:12px;}
+table.dt th{font-family:var(--cond); font-weight:600; font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); text-align:right; padding:6px 10px; border-bottom:1px solid var(--rule-2); position:sticky; top:0; background:var(--surface);}
+table.dt th:first-child, table.dt td:first-child{text-align:left;}
+table.dt td{padding:5px 10px; border-bottom:1px solid var(--rule); text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums;}
+.scroll{overflow:auto; max-height:340px;}
+
+/* ---------- verdict + reaction ---------- */
+.verdict{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,344px); gap:1px; background:var(--rule);}
+@media (max-width:860px){ .verdict{grid-template-columns:1fr;} }
+.verdict > div{background:var(--surface); padding:12px 14px;}
+.stat2{display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:10px 18px; margin-top:8px;}
+.stat2 b{font-family:var(--mono); font-weight:500; font-size:13px; display:block;}
+.badge{display:inline-flex; align-items:center; gap:5px; font-family:var(--cond); font-weight:600; font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; padding:2px 7px; border-radius:2px; border:1px solid;}
+.badge .dot{width:7px; height:7px; border-radius:50%;}
+.b-regressed{color:var(--crit-ink); border-color:var(--crit); background:rgba(208,59,59,.09);}
+.b-improved{color:var(--good-ink); border-color:var(--good); background:rgba(12,163,12,.09);}
+.b-stable{color:var(--muted); border-color:var(--rule-2); background:var(--chip);}
+.b-noisy{color:var(--ink2); border-color:var(--rule-2); background:repeating-linear-gradient(135deg,var(--chip),var(--chip) 3px,transparent 3px,transparent 6px);}
+.cmd{font-family:var(--mono); font-size:11.5px; color:var(--ink2); background:var(--well); border:1px solid var(--rule); border-radius:2px; padding:7px 9px; overflow-x:auto; white-space:pre;}
+footer.foot{color:var(--muted); font-size:11.5px; display:flex; flex-direction:column; gap:3px; padding-top:4px;}
+@media (prefers-reduced-motion:reduce){ *{transition:none !important; animation:none !important;} }
+</style>
+
+<div class="shell">
+
+  <header class="mast">
+    <div class="title">
+      <h1>bench-drift</h1>
+    </div>
+    <span class="spacer"></span>
+    <div class="readout">
+      <div><span class="lbl">Latest</span><b id="ro-run">—</b></div>
+      <div><span class="lbl">Report</span><b id="ro-report">—</b></div>
+      <div><label class="lbl" for="boardsel">Board</label><select id="boardsel"></select></div>
+      <div><span class="lbl">Suite</span><b id="ro-suite">—</b></div>
+      <div><label class="lbl" for="basesel">Baseline</label><select id="basesel"></select></div>
+      <div><label class="lbl" for="basewin">Baseline window</label><select id="basewin"></select></div>
+      <div><label class="lbl" for="winsel">Window</label><select id="winsel"></select></div>
+      <div><label class="lbl" for="thrsel">Regression threshold (p &lt; 0.05)</label><select id="thrsel"></select></div>
+    </div>
+  </header>
+
+  <section class="panel" aria-label="Movement between reports">
+    <header>
+      <h2>Movement between reports</h2>
+      <span id="ov-sub" style="font-size:12px; color:var(--muted)"></span>
+      <span class="grow"></span>
+      <div class="seg" role="group" aria-label="Heat map metric">
+        <button id="m-base" aria-pressed="true">Δ vs baseline</button>
+        <button id="m-prev" aria-pressed="false">Δ vs previous report</button>
+      </div>
+      <div class="seg" role="group" aria-label="Heat map rows">
+        <button id="m-moved" aria-pressed="false">Hide stable</button>
+      </div>
+    </header>
+    <div class="chartbox wide">
+      <svg id="ov" viewBox="0 0 1440 148" role="img" aria-label="How many benchmarks moved at each report"></svg>
+      <div class="heatscroll"><svg id="ovheat" viewBox="0 0 1440 400" role="img" aria-label="Per-family shift heat map across reports"></svg></div>
+      <div class="tip" id="otip"></div>
+    </div>
+    <div class="legend" id="ov-legend"></div>
+  </section>
+
+  <div class="main">
+    <section class="panel" aria-label="Benchmark catalogue">
+      <header><h2>Catalogue</h2><span class="grow"></span><span class="lbl" id="cat-count"></span></header>
+      <div class="chips" id="chips"></div>
+      <div class="srch">
+        <input id="q" type="search" placeholder="filter: name, argument, threads:16…" aria-label="Filter by name" spellcheck="false">
+        <div class="seg" role="group" aria-label="Grouping">
+          <button id="g-fam" aria-pressed="true">Families</button>
+          <button id="g-flat" aria-pressed="false">Flat list</button>
+        </div>
+        <div class="seg"><button id="g-toggle">Expand all</button></div>
+      </div>
+      
+      <div class="vp" id="vp"><div class="inner" id="vpinner"></div></div>
+    </section>
+
+    <section class="panel" aria-label="Selected benchmark history">
+      <div class="tracehead">
+        <div style="min-width:0">
+          <div class="bn" id="tr-name">—</div>
+          <div style="margin-top:3px; display:flex; gap:10px; flex-wrap:wrap; align-items:baseline">
+            <span class="lbl" id="tr-sub"></span>
+            <button class="famlink" id="tr-fam"></button>
+          </div>
+        </div>
+        <div class="hero">
+          <div style="text-align:right">
+            <div class="lbl" id="tr-metric">Median cpu_time</div>
+            <div class="big mono" id="tr-now">—</div>
+          </div>
+          <div style="text-align:right">
+            <div class="lbl">Δ vs baseline</div>
+            <div class="big mono" id="tr-delta">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="facts" id="tr-facts"></div>
+      <header style="border-top:0">
+        <h2>Trace</h2><span class="grow"></span>
+        <div class="seg" role="group" aria-label="View">
+          <button id="v-chart" aria-pressed="true">Chart</button>
+          <button id="v-boards" aria-pressed="false">All boards</button>
+          <button id="v-table" aria-pressed="false">Table</button>
+        </div>
+      </header>
+      <div class="plotwrap" id="plotwrap">
+        <svg id="plot" viewBox="0 0 920 342" role="img" aria-label="cpu_time across reports"></svg>
+        <svg id="bplot" viewBox="0 0 920 342" role="img" aria-label="Δ vs baseline per board" hidden></svg>
+        <div class="tip" id="tip"></div>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="scroll" id="tablewrap" hidden></div>
+
+      <div class="verdict">
+        <div>
+          <span class="lbl">Detector verdict</span>
+          <div id="vd-head" style="margin-top:6px"></div>
+          <div class="stat2" id="vd-stats"></div>
+        </div>
+        <div>
+          <span class="lbl">Record in the report</span>
+          <div class="cmd" id="vd-json" style="margin-top:6px"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <span>Detector: an 8×8 sliding window over the medians of the last 22 reports; the change point is located by the standardised two-sample statistic, significance by the Mann–Whitney test. The effect threshold rises to 1.5·CV of the channel, so noisy benchmarks are not flagged as regressions.</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+const $=(s,r=document)=>r.querySelector(s);
+const NS="http://www.w3.org/2000/svg";
+
+/* ============================ helpers ============================ */
+function median(a){const s=Array.prototype.slice.call(a).sort((x,y)=>x-y),n=s.length;return n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2;}
+function windowMedian(arr,from,to){const s=[];for(let i=from;i<to;i++)s.push(arr[i]);return median(s);}
+function normCdf(z){const t=1/(1+0.2316419*Math.abs(z)),d=0.3989422804014327*Math.exp(-z*z/2);
+  const p=d*t*(0.319381530+t*(-0.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429))));
+  return z>0?1-p:p;}
+function mannWhitneyP(a,b){
+  const all=[];for(const v of a)all.push({v,g:0});for(const v of b)all.push({v,g:1});
+  all.sort((x,y)=>x.v-y.v);
+  let i=0,R=0,ties=0;
+  while(i<all.length){let j=i;while(j+1<all.length&&all[j+1].v===all[i].v)j++;
+    const r=(i+j+2)/2,t=j-i+1;ties+=t*t*t-t;
+    for(let k=i;k<=j;k++) if(all[k].g===0) R+=r;
+    i=j+1;}
+  const n1=a.length,n2=b.length,N=n1+n2;
+  const U=R-n1*(n1+1)/2, mu=n1*n2/2;
+  const sd=Math.sqrt((n1*n2/12)*((N+1)-ties/(N*(N-1))));
+  if(!(sd>0)) return 1;
+  return Math.max(1e-6,Math.min(1,2*(1-normCdf((Math.abs(U-mu)-0.5)/sd))));
+}
+function fmtTime(ns){
+  if(ns<1) return ns.toFixed(3)+" ns";
+  if(ns<1000) return (ns<10?ns.toFixed(2):ns.toFixed(1))+" ns";
+  if(ns<1e6) return (ns/1e3).toFixed(ns<1e4?2:1)+" µs";
+  if(ns<1e9) return (ns/1e6).toFixed(ns<1e8?2:1)+" ms";
+  return (ns/1e9).toFixed(2)+" s";
+}
+const unitOf=ns=>ns<1000?"ns":ns<1e6?"us":"ms";
+const inUnit=ns=>ns<1000?ns:ns<1e6?ns/1e3:ns/1e6;
+const pct=(x,d)=>(x>=0?"+":"−")+Math.abs(x*100).toFixed(d===undefined?1:d)+" %";
+const fmtP=p=>p<0.001?"< 0.001":p.toFixed(3);
+const fmtInt=n=>Math.round(n).toLocaleString("en-US");
+/* Dates on the page are the reports' own clock: a run's `date` is the wall
+   clock the report wrote (see the payload loader), held as a UTC instant of
+   the same digits, so the formatters read it back in UTC — never the
+   viewer's zone, never the UTC instant. A launch at 02:00+03:00 prints as
+   02:00 on the day the operator saw it. */
+const DFMT=new Intl.DateTimeFormat("en-US",{day:"2-digit",month:"short",timeZone:"UTC"});
+const DTFMT=new Intl.DateTimeFormat("en-US",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"UTC"});
+/* "2026-09-11T02:00:00+03:00" -> the instant whose UTC digits are 2026-09-11
+   02:00 — the report's wall clock, offset dropped, not converted. And a
+   calendar day "YYYY-MM-DD" -> its day number, the unit the display window
+   and the baseline offset count in. */
+const wallClock=iso=>new Date(String(iso).replace(/(Z|[+-]\d\d:?\d\d)$/,"")+"Z");
+const dayNum=day=>Math.floor(Date.UTC(+day.slice(0,4),+day.slice(5,7)-1,+day.slice(8,10))/86400000);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ============================ history ============================ */
+const ALPHA=0.05;
+/* The regression bar. Everything that says "3 %" hangs off this one number:
+   the verdict in analyse() (a confirmed step counts once it is this big), the
+   movement bars, the "slower than baseline" chip and the dashed
+   line in the trace — so they all agree with each other. */
+const THR_OPTS=[0.01,0.02,0.03,0.05,0.10];
+let THRESHOLD=0.03;
+const thrPct=(v)=>"+"+(v*100).toFixed(v<0.02?1:0)+" %";
+// a tooltip's first two lines: the time and the file tell two reports of one day apart
+const reportHead=run=>'<div class="r"><span>'+DTFMT.format(run.date)+'</span></div>'
+  +'<div class="r"><span class="mono" style="color:var(--muted)">'+esc(run.report)+'</span></div><hr>';
+const winLabel=v=>v===1?"single report":"median of "+v+" reports";
+const options=(list,cur,label)=>list.map(v=>'<option value="'+v+'"'+(v===cur?" selected":"")+">"+label(v)+"</option>").join("");
+/* The page renders whatever window.BENCH_DRIFT_DATA holds and generates
+   nothing itself. bench_drift puts the history there, inlined before this
+   script. The typeof guard is for tests/model.js, which evaluates this code in Node and
+   hands the payload in as a parameter named window. */
+const DATA=(typeof window!=="undefined"&&window.BENCH_DRIFT_DATA)||null;
+if(!DATA){
+  if(typeof document!=="undefined"){
+    const el=document.querySelector(".shell");
+    if(el) el.innerHTML='<p style="padding:40px 16px; font-size:15px; color:var(--ink2)">No data. This page expects <code>window.BENCH_DRIFT_DATA</code> to be set before it runs — build it with <code>bench-drift --board NAME=PATH -o dashboard.html</code>.</p>';
+  }
+  throw new Error("bench-drift: no data — window.BENCH_DRIFT_DATA is not set");
+}
+const METRIC=DATA.metric||"cpu_time";
+const OTHER=METRIC==="cpu_time"?"real_time":"cpu_time";
+/* Every board has its own sequence of reports — runs and NRUNS are the active
+   board's, re-pointed by useBoard() along with the series. Boards share no
+   timeline: a board with 40 reports and one with 90 have 40 and 90 columns. */
+let NRUNS=0, REPS=1, runs=[];
+/* One report is a legitimate input. The page then shows what that report
+   measured — times, spread across repetitions, CV and the noisy flag, the
+   counters — and shows nothing where it would have to compare reports: Δ is
+   a dash, verdicts are stable by construction, the movement panel says so.
+   Set per board by useRuns(), read wherever a comparison is drawn. */
+let SNAPSHOT=false;
+function useRuns(bd){ runs=bd.runs; NRUNS=runs.length; SNAPSHOT=NRUNS<2; }
+
+/* ============================ benchmark catalogue ============================ */
+const insts=[];
+let NBM=0, BOARDS=[];
+/* ---- the series, from the payload ---- */
+{
+  REPS=(DATA.reps|0)||1;
+  // a board's runs: one point per report, in launch order, each with its
+  // timestamp (the report's own wall clock), the calendar day the report
+  // says it belongs to — `day` from the utility, in the report's own
+  // offset, never the UTC day of the instant — and the file it was read from
+  BOARDS=DATA.boards.map(b=>({id:b.id,host:b.host||"",note:b.note||"",report:b.report||"",
+    runs:(b.runs||[]).map((r,i)=>{ const day=r.day||String(r.date).slice(0,10);
+      return {i,date:wallClock(r.date),day,dn:dayNum(day),report:r.report||""}; })}));
+  useRuns(BOARDS[0]);
+  DATA.benchmarks.forEach(b=>{
+    const inst={id:insts.length,name:b.name,fam:b.fam,group:b.group||"",
+      arg:b.arg||0,tmpl:b.tmpl||"",threads:b.threads||1,iters:0,
+      s:{},boards:[]};
+    BOARDS.forEach(bd=>{
+      const s=b.s[bd.id]; if(!s) return;
+      inst.boards.push(bd.id);
+      // iterations, repetitions, the other time metric and the throughput
+      // counters are per board and per report — these are the latest report's
+      inst.s[bd.id]={med:Float64Array.from(s.med),p25:Float64Array.from(s.p25),
+                     p75:Float64Array.from(s.p75),cvA:Float64Array.from(s.cv),
+                     iters:s.iters,reps:s.reps,rt:s.rt,bps:s.bps,ips:s.ips};
+    });
+    if(inst.boards.length) insts.push(inst);
+  });
+  NBM=insts.length;
+}
+
+/* The threshold feeds analyse(), so changing it means re-running everything
+   derived from the verdicts — the same tail as useBoard(), minus the board. */
+function recomputeVerdicts(){
+  A=insts.map(x=>x.med?analyse(x):null);
+  rollupFamilies(); recomputeBaseline(); computeOverview();
+}
+
+/* Switching board re-points the active series and re-runs everything derived
+   from them; nothing downstream needs to know a board exists. */
+let board="qemu-x86", activeIds=[];
+function useBoard(id){
+  board=id; activeIds=[];
+  useRuns(BOARDS.find(b=>b.id===id)||BOARDS[0]);
+  recomputeOptions(); recomputeWindow();
+  for(let i=0;i<NBM;i++){
+    const s=insts[i].s[id];
+    if(s){ insts[i].med=s.med; insts[i].p25=s.p25; insts[i].p75=s.p75; insts[i].cvA=s.cvA;
+           insts[i].iters=s.iters;
+           insts[i].reps=s.reps; insts[i].rt=s.rt; insts[i].bps=s.bps; insts[i].ips=s.ips;
+           activeIds.push(i); }
+    else insts[i].med=null;
+  }
+  A=insts.map(x=>x.med?analyse(x):null);
+  rollupFamilies(); recomputeBaseline(); computeOverview();
+  if(!insts[sel]||!insts[sel].med){
+    let best=activeIds[0],sc=-1;
+    activeIds.forEach(i=>{ if(A[i].dWin>sc){sc=A[i].dWin;best=i;} });
+    sel=best;
+  }
+  collapsed.clear(); famIndex.forEach((e,f)=>collapsed.add(f));
+}
+
+/* ============================ detector ============================ */
+/* Three verdicts — did it change, and which way. Severity is not a verdict:
+   it is the number, printed on every row and driving the sort and the heat
+   map. Whether the channel can be trusted is a separate flag (noisy), carried
+   on any verdict: a regression on a noisy channel is still a regression, and
+   the reader deserves to know the channel is noisy. "regressed" is a verdict,
+   not an action — the page flags, nothing gets sent. */
+const SEV={
+  regressed:{o:0,color:"var(--crit)",   txt:"regression"},
+  improved: {o:1,color:"var(--good)",   txt:"speed-up"},
+  stable:   {o:2,color:"var(--rule-2)", txt:"stable"}
+};
+const NOISY_CV=0.03;
+function analyse(inst){
+  const m=inst.med, n=NRUNS;
+  const S=new Float64Array(n+1), Q=new Float64Array(n+1);
+  for(let i=0;i<n;i++){S[i+1]=S[i]+m[i];Q[i+1]=Q[i]+m[i]*m[i];}
+  const stats=(a,b)=>{const k=b-a,s=S[b]-S[a],mn=s/k,vr=Math.max(0,(Q[b]-Q[a]-s*mn)/Math.max(1,k-1));return{k,mn,vr};};
+  let best=null;
+  for(let k=Math.max(9,n-22);k<=n-3;k++){
+    const a0=Math.max(0,k-8), b1=Math.min(n,k+8);
+    if(k-a0<5||b1-k<3) continue;
+    const B=stats(a0,k), A=stats(k,b1);
+    const sp=Math.sqrt(((B.k-1)*B.vr+(A.k-1)*A.vr)/Math.max(1,B.k+A.k-2));
+    const t=sp>0?Math.abs(A.mn-B.mn)/(sp*Math.sqrt(1/B.k+1/A.k)):0;
+    if(!best||t>best.t) best={k,t,a0,b1};
+  }
+  let cp=null;
+  if(best){
+    const before=[],after=[];
+    for(let i=best.a0;i<best.k;i++) before.push(m[i]);
+    for(let i=best.k;i<best.b1;i++) after.push(m[i]);
+    const mb=median(before), ma=median(after);
+    const pooled=Math.max(median(before.map(x=>Math.abs(x-mb))),median(after.map(x=>Math.abs(x-ma))))*1.4826/mb||1e-6;
+    cp={k:best.k,t:best.t,ratio:ma/mb,p:mannWhitneyP(before,after),mb,ma,
+        z:Math.abs(ma/mb-1)/pooled,nb:before.length,na:after.length};
+  }
+  const noiseCv=windowMedian(inst.cvA,Math.max(0,n-20),n);
+  let sev="stable";
+  if(cp){
+    const eff=Math.abs(cp.ratio-1);
+    // real: significant, and beyond the channel's own scatter — that gate is
+    // what keeps noisy benchmarks quiet, and it does not move with THRESHOLD
+    const real=cp.p<ALPHA&&eff>Math.max(0.012,1.5*noiseCv);
+    if(real&&eff>=THRESHOLD) sev=cp.ratio>1?"regressed":"improved";
+  }
+  return {cp,noiseCv,noisy:noiseCv>NOISY_CV,sev,last:m[n-1],dWin:cp?cp.ratio-1:0,p:cp?cp.p:1};
+}
+let A=[];   // filled by useBoard(), which points the series at one board
+
+/* ---- rolling baseline: a median over baseWin reports, baseBack days back ----
+   baseBack is a calendar offset: the reference report is the board's last
+   column at least that many days older than its newest, so "−7 days" is a
+   week ago however many launches the week held. baseWin is a sample size —
+   that many columns ending at the reference, whatever days they fall on. More
+   than one report because a single unlucky launch would otherwise shift every
+   Δ on the page; how many is a judgement call about this suite's noise, so it
+   is a control rather than a constant. When no column is old enough for any
+   offset (a snapshot, two launches of one day) BASE_OPTS is empty, the
+   selector is disabled and the reference is the oldest report. */
+let BASE_OPTS=[], BASEWIN_OPTS=[], WIN_OPTS=[];
+let baseBack=7, baseAt=0, baseFrom=0, baseWin=5;
+
+/* ---- display window: how much of the history the charts show ----
+   Purely a view: the detector, the baseline and the family rollup all keep
+   working on the whole history, so a verdict does not change when you narrow
+   the view down to three days. w0 is the first visible report, wn the count. */
+let winDays=0, w0=0, wn=0, winCut=0;
+/* The three option lists follow the active board's history: an offset the
+   board cannot reach, a width wider than its history, a window longer than
+   its span are not offered. A choice that the new board cannot honour falls
+   back to the default (or the widest option). */
+function recomputeOptions(){
+  // an offset is offered only if the board's oldest report is that many days
+  // older than its newest; a choice no option matches falls back to the default
+  // or the furthest reachable — unless nothing is reachable, and then the
+  // choice is kept for the next board that can honour it
+  BASE_OPTS=[7,14,30,45].filter(v=>runs[0].dn<=runs[NRUNS-1].dn-v);
+  if(BASE_OPTS.length&&BASE_OPTS.indexOf(baseBack)<0) baseBack=BASE_OPTS.indexOf(7)>=0?7:BASE_OPTS[BASE_OPTS.length-1];
+  BASEWIN_OPTS=[1,3,5,9,15,21].filter(v=>v<=NRUNS);
+  if(!BASEWIN_OPTS.length) BASEWIN_OPTS.push(1);
+  if(BASEWIN_OPTS.indexOf(baseWin)<0) baseWin=BASEWIN_OPTS.indexOf(5)>=0?5:BASEWIN_OPTS[BASEWIN_OPTS.length-1];
+  // reports are dated, and a real history has gaps — count calendar days, not
+  // array slots, so "7 days" means seven days whatever ran inside them
+  const span=runs[NRUNS-1].dn-runs[0].dn+1;
+  const all=[90,60,30,14,7,3,1];
+  WIN_OPTS=all.filter(v=>v<span);
+  // plus the smallest option that covers the whole history, so "everything"
+  // stays reachable — unless the history is longer than the widest option,
+  // and then 90 days is simply as far back as the dashboard looks
+  const cover=all.filter(v=>v>=span).pop();
+  if(cover!==undefined) WIN_OPTS.unshift(cover);
+  // the default view is the last two weeks; a shorter history shows all of itself
+  if(WIN_OPTS.indexOf(winDays)<0) winDays=WIN_OPTS.indexOf(14)>=0?14:WIN_OPTS[0];
+}
+function recomputeWindow(){
+  winCut=runs[NRUNS-1].dn-(winDays-1);
+  let i=0; while(i<NRUNS-1&&runs[i].dn<winCut) i++;
+  w0=i; wn=NRUNS-w0;
+}
+recomputeOptions(); recomputeWindow();
+let baseArr=new Float64Array(NBM), dBase=new Float64Array(NBM);
+/* The reference column and the window ending there, for a board with these
+   runs — the rule lives here so the cross-board view can apply it to each
+   board's own history. The reference is the last column at least baseBack
+   calendar days older than the newest; a board with no such column (its
+   history is shorter than the offset) falls back to its oldest report. */
+function baseIndices(rs){
+  const n=rs.length, cut=rs[n-1].dn-baseBack;
+  let at=n-1; while(at>0&&rs[at].dn>cut) at--;
+  // near the very start of the history the window is simply shorter
+  return {at, from:Math.max(0,at-(baseWin-1))};
+}
+/* The offset as the page names it: an offset no report reaches is not
+   "−N days" but the oldest report there is. */
+const backLabel=()=>BASE_OPTS.length?"−"+baseBack+" days":"the oldest report";
+function recomputeBaseline(){
+  const {at,from}=baseIndices(runs), to=at+1;
+  baseAt=at; baseFrom=from;
+  for(let i=0;i<NBM;i++){
+    if(!A[i]){ baseArr[i]=0; dBase[i]=0; continue; }
+    const b=windowMedian(insts[i].med,from,to);
+    baseArr[i]=b; dBase[i]=A[i].last/b-1;
+  }
+}
+
+/* ---- movement between adjacent reports and the family heat map ---- */
+let reportMoves=[], famRows=[], famDBase=[], famDPrev=[], famFloorBase=[], famFloorPrev=[], heatMode="base", heatMoved=false;
+// a family's cell takes the shift of its worst-moving decile, not the median:
+// regressions usually hit a subset of the instances (one template, the large sizes),
+// and a median over the whole family averages them away
+function q90signed(a){
+  const s=a.slice().sort((x,y)=>Math.abs(x)-Math.abs(y));
+  return s[Math.min(s.length-1,Math.floor(s.length*0.9))];
+}
+function computeOverview(){
+  const n=NRUNS;
+  reportMoves=new Array(n); for(let k=0;k<n;k++) reportMoves[k]={up:0,down:0};
+  for(let i=0;i<NBM;i++){
+    if(!A[i]) continue;
+    const m=insts[i].med;
+    // a move counts only past the channel's own report-to-report scatter, so noisy
+    // benchmarks do not fill the bars at every report
+    const lim=Math.max(THRESHOLD,3*A[i].noiseCv);
+    for(let k=1;k<n;k++){
+      const r=m[k]/m[k-1]-1;
+      if(r>lim) reportMoves[k].up++; else if(r<-lim) reportMoves[k].down++;
+    }
+  }
+  famRows=[...famIndex.keys()].sort((a,b)=>Math.abs(famIndex.get(b).worst)-Math.abs(famIndex.get(a).worst));
+  famDBase=[]; famDPrev=[]; famFloorBase=[]; famFloorPrev=[];
+  famRows.forEach(f=>{
+    const ids=famIndex.get(f).ids, a=new Float64Array(n), p=new Float64Array(n);
+    const bufA=new Array(ids.length), bufP=new Array(ids.length);
+    for(let k=0;k<n;k++){
+      for(let j=0;j<ids.length;j++){
+        const i=ids[j];
+        bufA[j]=insts[i].med[k]/baseArr[i]-1;
+        bufP[j]=k?insts[i].med[k]/insts[i].med[k-1]-1:0;
+      }
+      a[k]=q90signed(bufA); p[k]=q90signed(bufP);
+    }
+    famDBase.push(a); famDPrev.push(p);
+    // the worst-decile statistic gets noisier as a family grows, so each row
+    // carries its own quiet-scatter floor instead of one global number
+    const abs=v=>{const o=new Array(v.length);for(let k=0;k<v.length;k++)o[k]=Math.abs(v[k]);return o;};
+    famFloorBase.push(Math.max(0.012,2*median(abs(a))));
+    famFloorPrev.push(Math.max(0.012,2*median(abs(p))));
+  });
+}
+
+/* ---- per-family rollup ---- */
+let famIndex=new Map();
+function rollupFamilies(){
+  famIndex=new Map();
+  for(let i=0;i<NBM;i++){
+    if(!A[i]) continue;
+    const f=insts[i].fam;
+    let e=famIndex.get(f);
+    if(!e){e={fam:f,group:insts[i].group,ids:[],counts:{},regressed:0,noisy:0,moved:0,worst:0};famIndex.set(f,e);}
+    e.ids.push(i);
+    const s=A[i].sev; e.counts[s]=(e.counts[s]||0)+1;
+    if(A[i].noisy) e.noisy++;
+    if(s==="regressed") e.regressed++;
+    if(s!=="stable") e.moved++;
+    if(Math.abs(A[i].dWin)>Math.abs(e.worst)) e.worst=A[i].dWin;
+  }
+}
+
+/* ============================ view state ============================ */
+let sel=0, query="", sevFilter="all", grouped=true, view="chart";
+let collapsed=new Set(), forcedOpen=false;
+let filtered=[], flat=[], offs=[];
+const GH=32, RH=46;
+
+function matches(i){
+  if(!A[i]) return false;
+  if(sevFilter==="regressed"&&A[i].sev!=="regressed") return false;
+  if(sevFilter==="improved"&&A[i].sev!=="improved") return false;
+  if(sevFilter==="noisy"&&!A[i].noisy) return false;
+  if(sevFilter==="slower"&&!(dBase[i]>=THRESHOLD)) return false;
+  if(query&&insts[i].name.toLowerCase().indexOf(query)<0) return false;
+  return true;
+}
+function rebuild(){
+  // a narrowed view always shows its matches, whatever the collapse state is
+  forcedOpen=!!query||sevFilter!=="all";
+  filtered=[];
+  for(let i=0;i<NBM;i++) if(matches(i)) filtered.push(i);
+  flat=[];
+  if(grouped){
+    const byFam=new Map();
+    filtered.forEach(i=>{const f=insts[i].fam;let a=byFam.get(f);if(!a){a=[];byFam.set(f,a);}a.push(i);});
+    const fams=[...byFam.entries()].sort((a,b)=>{
+      const wa=Math.max(...a[1].map(i=>Math.abs(A[i].dWin))), wb=Math.max(...b[1].map(i=>Math.abs(A[i].dWin)));
+      return wb-wa;
+    });
+    fams.forEach(([f,ids])=>{
+      ids.sort((x,y)=>Math.abs(A[y].dWin)-Math.abs(A[x].dWin));
+      flat.push({t:"g",fam:f,ids});
+      if(forcedOpen||!collapsed.has(f)) ids.forEach(i=>flat.push({t:"r",i}));
+    });
+  } else {
+    filtered.slice().sort((x,y)=>Math.abs(A[y].dWin)-Math.abs(A[x].dWin)).forEach(i=>flat.push({t:"r",i}));
+  }
+  offs=new Array(flat.length+1); offs[0]=0;
+  for(let k=0;k<flat.length;k++) offs[k+1]=offs[k]+(flat[k].t==="g"?GH:RH);
+  $("#cat-count").textContent=fmtInt(filtered.length)+" of "+fmtInt(activeIds.length);
+  const allShut=collapsed.size>=famIndex.size;
+  $("#g-toggle").textContent=allShut?"Expand all":"Collapse all";
+  $("#g-toggle").disabled=!grouped||forcedOpen;
+  $("#g-toggle").style.opacity=(!grouped||forcedOpen)?".45":"1";
+}
+
+/* ============================ strip ============================ */
+function renderFilters(){
+  let regressed=0,cImp=0,cNoisy=0,cSlow=0,worst=0;
+  for(let i=0;i<NBM;i++){
+    if(!A[i]) continue;
+    const s=A[i].sev;
+    if(s==="regressed"){ regressed++; if(A[i].dWin>worst) worst=A[i].dWin; }
+    else if(s==="improved") cImp++;
+    if(A[i].noisy) cNoisy++;
+    if(dBase[i]>=THRESHOLD) cSlow++;
+  }
+  const fams=new Set();
+  for(let i=0;i<NBM;i++) if(A[i]&&A[i].sev==="regressed") fams.add(insts[i].fam);
+  const chips=[
+    {f:"all",      l:"All",                 v:activeIds.length,    dot:"",                title:famIndex.size+" families · typically "+REPS+" repetitions"},
+    {f:"regressed",l:"Regressions",         v:regressed, dot:"var(--crit)",  title:regressed?fams.size+" families · worst "+pct(worst):"none"},
+    SNAPSHOT?null:{f:"slower",   l:"Slower than baseline",v:cSlow,  dot:"var(--warn)",     title:"by over "+thrPct(THRESHOLD).slice(1)+" vs baseline "+backLabel()},
+    {f:"improved", l:"Speed-ups",           v:cImp,   dot:"var(--good)",     title:"confirmed by the detector"},
+    {f:"noisy",    l:"Noisy channels",      v:cNoisy, dot:"var(--rule-2)",   title:"CV above 3 % — a flag on any verdict, not a verdict: a step here must clear 1.5·CV to count"}
+  ];
+  $("#chips").innerHTML=chips.filter(Boolean).map(c=>
+    '<button class="chip" data-f="'+c.f+'" aria-pressed="'+(sevFilter===c.f)+'" title="'+esc(c.title)+'">'
+    +(c.dot?'<i class="cdot" style="background:'+c.dot+'"></i>':"")
+    +c.l+'<span class="n">'+fmtInt(c.v)+"</span></button>").join("");
+}
+
+/* ============================ movement overview ============================ */
+// the status hexes are theme-invariant by design, so the heat ramp holds in both themes
+function heatFill(v,scale,floor){
+  if(Math.abs(v)<(floor||0.012)) return "var(--rule-2)"; // inside this row's own scatter
+  const t=Math.max(-1,Math.min(1,v/scale));
+  const a=(0.16+0.84*Math.abs(t)).toFixed(3);
+  return t>0?"rgba(208,59,59,"+a+")":"rgba(12,163,12,"+a+")";
+}
+function renderOverview(){
+  const n=NRUNS;
+  const W=1440,pl=236,pr=16,bt=16,bh=74,HB=148,rh=15;
+  const cw=(W-pl-pr)/wn, bz=bt+bh/2;
+  const data=heatMode==="base"?famDBase:famDPrev;
+  const floors=heatMode==="base"?famFloorBase:famFloorPrev;
+  const scale=heatMode==="base"?0.12:0.04;
+  // rows keep their index into famRows/data even when the list is filtered
+  const vis=[];
+  famRows.forEach((f,i)=>{ if(!heatMoved||famIndex.get(f).moved>0) vis.push(i); });
+  const rows=vis.length, H2=8+rows*rh;
+  let maxMove=1;
+  for(let k=w0;k<n;k++) maxMove=Math.max(maxMove,reportMoves[k].up,reportMoves[k].down);
+  const X=k=>pl+(k-w0)*cw, mv=c=>(c/maxMove)*(bh/2);
+  // the baseline can sit before the display window — then its band is not drawn
+  const bandOn=baseAt>=w0, bandX=Math.max(pl,X(baseFrom));
+  const bandW=bandOn?Math.max(2,Math.min(X(baseAt+1),W-pr)-bandX):0;
+  const T=(x,y,s,o)=>{o=o||{};return '<text x="'+x+'" y="'+y+'" font-size="'+(o.fs||12)+'" fill="'+(o.fill||"var(--muted)")+'"'
+    +(o.anchor?' text-anchor="'+o.anchor+'"':"")+(o.ff?' font-family="'+o.ff+'"':"")+(o.ls?' letter-spacing="'+o.ls+'"':"")+">"+s+"</text>";};
+
+  /* --- top chart: how many benchmarks moved at each report --- */
+  let s=bandOn?'<rect x="'+bandX+'" y="'+bt+'" width="'+bandW+'" height="'+bh+'" fill="var(--ink2)" fill-opacity=".07"/>':"";
+  s+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+bz+'" y2="'+bz+'" stroke="var(--rule-2)" stroke-width="1"/>';
+  for(let k=w0;k<n;k++){
+    const u=reportMoves[k].up, d=reportMoves[k].down;
+    // a single benchmark is 1/maxMove of the half-height — floor the drawn bar
+    // so one mover stays visible instead of rendering as a hairline
+    const hu=u?Math.max(2.5,mv(u)):0, hd=d?Math.max(2.5,mv(d)):0;
+    if(u) s+='<rect x="'+(X(k)+0.6).toFixed(2)+'" y="'+(bz-hu).toFixed(2)+'" width="'+(cw-1.2).toFixed(2)+'" height="'+hu.toFixed(2)+'" fill="var(--crit)" fill-opacity=".85" rx="1"/>';
+    if(d) s+='<rect x="'+(X(k)+0.6).toFixed(2)+'" y="'+bz.toFixed(2)+'" width="'+(cw-1.2).toFixed(2)+'" height="'+hd.toFixed(2)+'" fill="var(--good)" fill-opacity=".85" rx="1"/>';
+  }
+  s+=T(pl-10,bz-mv(maxMove)+4,fmtInt(maxMove),{anchor:"end",ff:"var(--mono)"});
+  s+=T(pl-10,bz+4,"0",{anchor:"end",ff:"var(--mono)"});
+  s+=T(pl-10,bz+mv(maxMove)+4,fmtInt(maxMove),{anchor:"end",ff:"var(--mono)"});
+  s+=T(pl+8,bt+11,"GOT SLOWER",{fs:10.5,ff:"var(--cond)",ls:".07em",fill:"var(--crit-ink)"});
+  s+=T(pl+8,bt+bh-3,"GOT FASTER",{fs:10.5,ff:"var(--cond)",ls:".07em",fill:"var(--good-ink)"});
+  s+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="98" y2="98" stroke="var(--rule-2)" stroke-width="1"/>';
+  const lstep=Math.max(1,Math.ceil(wn/6));
+  for(let k=w0;k<n;k+=lstep) s+=T(X(k)+cw/2,114,DFMT.format(runs[k].date),{anchor:"middle"});
+  // clamped off the left edge: a band squeezed to 2px would centre its caption
+  // on top of "FAMILIES BELOW", which is anchored at pl-10
+  if(bandOn) s+=T(Math.max(pl+56,bandX+bandW/2),134,"baseline window",{anchor:"middle",fs:11,ff:"var(--cond)",ls:".06em",fill:"var(--ink2)"});
+  s+=T(pl-10,134,"FAMILIES BELOW, BY DESCENDING SHIFT",{anchor:"end",fs:10.5,ff:"var(--cond)",ls:".07em"});
+  s+='<rect id="ovhit" x="'+pl+'" y="'+bt+'" width="'+(W-pl-pr)+'" height="'+(98-bt)+'" fill="transparent" style="cursor:pointer"/>';
+  s+='<line id="ovcur" x1="0" x2="0" y1="'+bt+'" y2="98" stroke="var(--ink2)" stroke-width="1" opacity="0"/>';
+  const svg=$("#ov"); svg.setAttribute("viewBox","0 0 "+W+" "+HB); svg.innerHTML=s;
+
+  /* --- heat map, in its own scroller --- */
+  let g=bandOn?'<rect x="'+bandX+'" y="0" width="'+bandW+'" height="'+H2+'" fill="var(--ink2)" fill-opacity=".07"/>':"";
+  // most cells sit inside the noise floor; drawing one neutral bar per row and
+  // only the cells that moved keeps the DOM small when there are many families
+  vis.forEach((fi,r)=>{
+    const y=4+r*rh, arr=data[fi];
+    g+=T(pl-10,y+rh-3,esc(famRows[fi]),{anchor:"end",fs:12,ff:"var(--mono)",fill:"var(--ink2)"});
+    g+='<rect x="'+X(w0).toFixed(2)+'" y="'+y+'" width="'+(wn*cw-0.4).toFixed(2)+'" height="'+(rh-1)+'" fill="var(--rule-2)"/>';
+    for(let k=w0;k<n;k++){
+      const fill=heatFill(arr[k],scale,floors[fi]);
+      if(fill==="var(--rule-2)") continue;
+      g+='<rect x="'+X(k).toFixed(2)+'" y="'+y+'" width="'+(cw-0.4).toFixed(2)+'" height="'+(rh-1)+'" fill="'+fill+'"/>';
+    }
+  });
+  if(!rows) g+=T(W/2,26,"Every family stayed stable over these reports.",{anchor:"middle"});
+  g+='<rect id="hthit" x="'+pl+'" y="0" width="'+(W-pl-pr)+'" height="'+H2+'" fill="transparent" style="cursor:pointer"/>';
+  g+='<line id="htcur" x1="0" x2="0" y1="0" y2="'+H2+'" stroke="var(--ink2)" stroke-width="1" opacity="0"/>';
+  const hsvg=$("#ovheat"); hsvg.setAttribute("viewBox","0 0 "+W+" "+H2); hsvg.innerHTML=g;
+
+  /* --- shared cursor and tooltip --- */
+  const tip=$("#otip"), wrap=svg.parentElement;
+  const cur=svg.querySelector("#ovcur"), hcur=hsvg.querySelector("#htcur");
+  const reportAt=(el,ev)=>{
+    const bb=el.getBoundingClientRect();
+    return {bb,k:Math.max(w0,Math.min(n-1,w0+Math.floor(((ev.clientX-bb.left)*(W/bb.width)-pl)/cw)))};
+  };
+  const place=(bb,k,ev)=>{
+    const off=wrap.getBoundingClientRect();
+    const px=(X(k)+cw/2)*(bb.width/W)+(bb.left-off.left)+wrap.scrollLeft;
+    tip.style.left=Math.max(6,Math.min(wrap.scrollWidth-tip.offsetWidth-6,px+14))+"px";
+    tip.style.top=Math.max(6,(ev.clientY-off.top)-10)+"px";
+  };
+  const reportBody=k=>{
+    const run=runs[k], m=reportMoves[k];
+    return reportHead(run)
+      +'<div class="r"><span>slower than the report before</span><b class="up">'+fmtInt(m.up)+'</b></div>'
+      +'<div class="r"><span>faster than the report before</span><b class="down">'+fmtInt(m.down)+'</b></div>';
+  };
+  const showCur=k=>{ const x=X(k)+cw/2;
+    cur.setAttribute("x1",x); cur.setAttribute("x2",x); cur.setAttribute("opacity",".3");
+    hcur.setAttribute("x1",x); hcur.setAttribute("x2",x); hcur.setAttribute("opacity",".3"); };
+  const hideCur=()=>{ cur.setAttribute("opacity",0); hcur.setAttribute("opacity",0); tip.classList.remove("on"); };
+
+  svg.querySelector("#ovhit").addEventListener("pointermove",ev=>{
+    const {bb,k}=reportAt(svg,ev); showCur(k);
+    tip.innerHTML=reportBody(k); tip.classList.add("on"); place(bb,k,ev);
+  });
+  svg.querySelector("#ovhit").addEventListener("pointerleave",hideCur);
+
+  const hhit=hsvg.querySelector("#hthit");
+  hhit.addEventListener("pointermove",ev=>{
+    const {bb,k}=reportAt(hsvg,ev); showCur(k);
+    const vy=(ev.clientY-bb.top)*(H2/bb.height);
+    const r=Math.max(0,Math.min(rows-1,Math.floor((vy-4)/rh)));
+    let body=reportBody(k);
+    if(rows){
+      const fi=vis[r], f=famRows[fi], e=famIndex.get(f), v=data[fi][k];
+      body+="<hr>"+'<div class="r"><span>'+esc(f)+'</span><b>'+e.ids.length+" instances</b></div>"
+        +'<div class="r"><span>'+(heatMode==="base"?"worst decile vs baseline":"worst decile vs previous report")+'</span><b class="'+(v>0?"up":"down")+'">'+pct(v,2)+"</b></div>"
+        +(e.regressed?'<div class="r"><span>regressed now</span><b>'+e.regressed+"</b></div>":"");
+    }
+    tip.innerHTML=body; tip.classList.add("on"); place(bb,k,ev);
+  });
+  hhit.addEventListener("pointerleave",hideCur);
+  hhit.addEventListener("click",ev=>{
+    if(!rows) return;
+    const bb=hsvg.getBoundingClientRect();
+    const vy=(ev.clientY-bb.top)*(H2/bb.height);
+    const r=Math.max(0,Math.min(rows-1,Math.floor((vy-4)/rh)));
+    const f=famRows[vis[r]], ids=famIndex.get(f).ids;
+    let best=ids[0]; ids.forEach(i=>{ if(Math.abs(A[i].dWin)>Math.abs(A[best].dWin)) best=i; });
+    sel=best; query=f.toLowerCase(); $("#q").value=f;
+    sevFilter="all";
+    renderFilters(); rebuild(); $("#vp").scrollTop=0; renderWindow(); renderDetail();
+    showView();
+    $(".main").scrollIntoView({behavior:"smooth",block:"start"});
+  });
+
+  let moved=0; for(let k=w0;k<n;k++) moved+=reportMoves[k].up+reportMoves[k].down;
+  $("#ov-sub").textContent=SNAPSHOT
+    ? "one report — nothing moved yet, because there is nothing to move from; add a second report and this panel fills in"
+    : "bars: benchmarks that moved since the report before · "+wn+(wn===1?" report, ":" reports, ")+fmtInt(moved)
+    +" moves · "+rows+" of "+famRows.length+" families shown";
+  const sw=v=>'<i class="key sw" style="background:'+heatFill(v,scale)+'"></i>';
+  $("#ov-legend").innerHTML=
+     "<span>"+sw(-scale)+sw(-scale*0.5)+sw(0)+sw(scale*0.5)+sw(scale)+"</span>"
+    +"<span>"+pct(-scale,0)+" ← family worst-decile shift → "+pct(scale,0)+"</span>"
+    +'<span><i class="key sw" style="background:var(--crit)"></i>bars above the line: slowed since the report before, beyond their own noise</span>'
+    +'<span><i class="key sw" style="background:var(--good)"></i>below the line: sped up</span>'
+    +"<span>click a heat-map row to open the family</span>";
+}
+
+/* ============================ virtualised catalogue ============================ */
+function sparkSvg(i){
+  const m=insts[i].med, n=m.length, from=Math.max(w0,n-30);
+  let lo=Infinity,hi=-Infinity;
+  for(let k=from;k<n;k++){ if(m[k]<lo)lo=m[k]; if(m[k]>hi)hi=m[k]; }
+  const rg=(hi-lo)||1, W=88, Hh=24, cnt=n-from;
+  let d="";
+  for(let k=from;k<n;k++){
+    const x=(cnt>1?(k-from)*(W-4)/(cnt-1)+2:W/2).toFixed(1), y=(Hh-3-((m[k]-lo)/rg)*(Hh-7)).toFixed(1);
+    d+=(k===from?"M":"L")+x+" "+y+" ";
+  }
+  const ly=(Hh-3-((m[n-1]-lo)/rg)*(Hh-7)).toFixed(1);
+  return '<svg width="'+W+'" height="'+Hh+'" viewBox="0 0 '+W+' '+Hh+'" aria-hidden="true">'
+    +'<path d="'+d+'" fill="none" stroke="var(--muted)" stroke-width="1.3" stroke-linejoin="round"/>'
+    // a hollow dot marks a noisy channel, whatever the verdict
+    +(A[i].noisy
+      ? '<circle cx="'+(W-2)+'" cy="'+ly+'" r="2.5" fill="var(--surface)" stroke="'+SEV[A[i].sev].color+'" stroke-width="1.5"/>'
+      : '<circle cx="'+(W-2)+'" cy="'+ly+'" r="2.5" fill="'+SEV[A[i].sev].color+'"/>')+'</svg>';
+}
+function sevBar(counts,total){
+  const order=["regressed","improved","stable"];
+  return order.map(s=>{const c=counts[s]||0; if(!c) return "";
+    return '<i style="width:'+(c/total*100).toFixed(2)+'%; background:'+SEV[s].color+'; opacity:'+(s==="stable"?.35:1)+'"></i>';}).join("");
+}
+let rafPending=false;
+function renderWindow(){
+  const vp=$("#vp"), inner=$("#vpinner");
+  inner.style.height=(offs[flat.length]||0)+"px";
+  if(!flat.length){ inner.innerHTML='<div class="noneMsg">Nothing found. Clear the filter or change the query.</div>'; return; }
+  const st=vp.scrollTop, vh=vp.clientHeight;
+  let a=0,b=flat.length-1,start=0;
+  while(a<=b){const mid=(a+b)>>1; if(offs[mid+1]<=st){a=mid+1;}else{start=mid;b=mid-1;}}
+  start=Math.max(0,start-3);
+  let end=start; while(end<flat.length&&offs[end]<st+vh+140) end++;
+  let html="";
+  for(let k=start;k<end;k++){
+    const it=flat[k], top=offs[k];
+    if(it.t==="g"){
+      const e=famIndex.get(it.fam), counts={};
+      it.ids.forEach(i=>{const s=A[i].sev;counts[s]=(counts[s]||0)+1;});
+      const regressed=it.ids.filter(i=>A[i].sev==="regressed").length;
+      const open=forcedOpen||!collapsed.has(it.fam);
+      html+='<button class="vgrp" data-fam="'+esc(it.fam)+'" style="top:'+top+'px" aria-expanded="'+open+'">'
+        +'<span class="caret">'+(open?"▾":"▸")+'</span>'
+        +'<span class="fam">'+esc(it.fam)+'</span>'
+        +'<span class="bar" title="verdict mix">'+sevBar(counts,it.ids.length)+'</span>'
+        +'<span class="cnt">'+(regressed?regressed+" / ":"")+it.ids.length+'</span></button>';
+    } else {
+      const i=it.i, d=dBase[i], cp=A[i].cp;
+      const cls=SNAPSHOT||Math.abs(d)<0.01?"flat":d>0?"up":"down";
+      const label=grouped?insts[i].name.slice(insts[i].fam.length)||"/"+insts[i].arg:insts[i].name;
+      html+='<button class="vrow" data-i="'+i+'" style="top:'+top+'px" aria-current="'+(i===sel)+'" title="'+esc(insts[i].name)+'">'
+        +'<span class="stripe" style="background:'+SEV[A[i].sev].color+'"></span>'
+        +'<span class="meta"><span class="nm">'+esc(label)+'</span>'
+        +'<span class="sm">'+fmtTime(A[i].last)+(cp&&A[i].sev!=="stable"?" · step "+DTFMT.format(runs[cp.k].date):"")+(A[i].noisy?" · noisy":"")+'</span></span>'
+        +'<span class="right">'+sparkSvg(i)+'<span class="delta '+cls+'">'+(SNAPSHOT?"—":pct(d))+'</span></span></button>';
+    }
+  }
+  inner.innerHTML=html;
+}
+$("#vp").addEventListener("scroll",()=>{ if(rafPending) return; rafPending=true;
+  requestAnimationFrame(()=>{rafPending=false;renderWindow();}); });
+
+/* ============================ trace plot ============================ */
+const P={l:64,r:16,t:18,b:48,W:920,H:342};
+function renderPlot(){
+  const inst=insts[sel], a=A[sel], n=NRUNS;
+  const svg=$("#plot"); svg.innerHTML="";
+  let lo0=Infinity,hi0=-Infinity;
+  for(let i=w0;i<n;i++){ if(inst.p25[i]<lo0)lo0=inst.p25[i]; if(inst.p75[i]>hi0)hi0=inst.p75[i]; }
+  hi0=Math.max(hi0,baseArr[sel]*(1+THRESHOLD));
+  const pad=(hi0-lo0)*0.14||hi0*0.05;
+  let lo=Math.max(0,lo0-pad), hi=hi0+pad;
+  const ticks=niceTicks(lo,hi,5); lo=ticks[0]; hi=ticks[ticks.length-1];
+  // a one-report window has no span to spread over — park the single point mid-plot
+  const sp=P.W-P.l-P.r;
+  const X=i=>wn>1?P.l+(i-w0)*sp/(wn-1):P.l+sp/2, Y=v=>P.t+(1-(v-lo)/(hi-lo))*(P.H-P.t-P.b);
+  const add=(tag,at,txt)=>{const e=document.createElementNS(NS,tag);for(const k in at)e.setAttribute(k,at[k]);
+    if(txt!==undefined)e.textContent=txt; svg.appendChild(e); return e;};
+
+  ticks.forEach(v=>{ add("line",{x1:P.l,x2:P.W-P.r,y1:Y(v),y2:Y(v),stroke:"var(--rule)","stroke-width":1});
+    add("text",{x:P.l-9,y:Y(v)+4,"text-anchor":"end","font-size":12,fill:"var(--muted)","font-family":"var(--mono)"},
+      inUnit(v).toFixed(inUnit(v)<100?1:0)); });
+  add("text",{x:P.l-9,y:P.t-6,"text-anchor":"end","font-size":11,fill:"var(--muted)","font-family":"var(--cond)","letter-spacing":".07em"},unitOf(a.last));
+  const lstep=Math.max(1,Math.ceil(wn/6));
+  for(let i=w0;i<n;i+=lstep) add("text",{x:X(i),y:P.H-30,"text-anchor":"middle","font-size":12,fill:"var(--muted)"},DFMT.format(runs[i].date));
+  add("line",{x1:P.l,x2:P.W-P.r,y1:Y(lo),y2:Y(lo),stroke:"var(--rule-2)","stroke-width":1});
+
+  const thrY=Y(baseArr[sel]*(1+THRESHOLD));
+  add("rect",{x:P.l,y:P.t,width:P.W-P.l-P.r,height:Math.max(0,thrY-P.t),fill:"var(--crit)","fill-opacity":.055});
+  add("line",{x1:P.l,x2:P.W-P.r,y1:thrY,y2:thrY,stroke:"var(--crit)","stroke-width":1,"stroke-dasharray":"5 4","stroke-opacity":.8});
+  add("text",{x:P.W-P.r-4,y:thrY-5,"text-anchor":"end","font-size":11,fill:"var(--crit-ink)","font-family":"var(--cond)","letter-spacing":".06em"},"REGRESSION "+thrPct(THRESHOLD));
+  add("line",{x1:P.l,x2:P.W-P.r,y1:Y(baseArr[sel]),y2:Y(baseArr[sel]),stroke:"var(--muted)","stroke-width":1,"stroke-dasharray":"2 4"});
+  add("text",{x:P.l+4,y:Y(baseArr[sel])-5,"font-size":11,fill:"var(--muted)","font-family":"var(--cond)","letter-spacing":".06em"},BASE_OPTS.length?"BASELINE · "+baseBack+" DAYS BACK":"BASELINE · OLDEST REPORT");
+
+  // the reports the baseline is taken from — outside the display window
+  // when that is shorter than the baseline offset, and then not drawn at all
+  if(baseAt>=w0){
+    const bx=Math.max(P.l,X(baseFrom)), bw=Math.max(2,Math.min(P.W-P.r,X(baseAt))-bx);
+    add("rect",{x:bx,y:P.t,width:bw,height:P.H-P.t-P.b,fill:"var(--ink2)","fill-opacity":.07});
+    add("text",{x:Math.max(P.l+62,bx+bw/2),y:P.t+13,"text-anchor":"middle","font-size":10.5,fill:"var(--ink2)","font-family":"var(--cond)","letter-spacing":".06em"},"BASELINE WINDOW");
+  }
+
+  let up="",dn="";
+  for(let i=w0;i<n;i++) up+=(i>w0?"L":"M")+X(i).toFixed(1)+" "+Y(inst.p75[i]).toFixed(1)+" ";
+  for(let i=n-1;i>=w0;i--) dn+="L"+X(i).toFixed(1)+" "+Y(inst.p25[i]).toFixed(1)+" ";
+  add("path",{d:up+dn+"Z",fill:"var(--accent-band)",stroke:"none"});
+
+  if(a.cp&&a.cp.k>=w0&&a.sev!=="stable"){
+    const cx=X(a.cp.k), col=SEV[a.sev].color, lab=DFMT.format(runs[a.cp.k].date), w=lab.length*7+14;
+    add("line",{x1:cx,x2:cx,y1:P.t,y2:P.H-P.b,stroke:col,"stroke-width":1.5,"stroke-dasharray":"4 3"});
+    const bx=Math.min(cx+5,P.W-P.r-w);
+    add("rect",{x:bx,y:P.t+2,width:w,height:17,rx:2,fill:col,"fill-opacity":.14,stroke:col,"stroke-opacity":.5});
+    add("text",{x:bx+7,y:P.t+14,"font-size":11.5,fill:"var(--ink2)","font-family":"var(--mono)"},lab);
+  }
+  let ml="";
+  for(let i=w0;i<n;i++) ml+=(i>w0?"L":"M")+X(i).toFixed(1)+" "+Y(inst.med[i]).toFixed(1)+" ";
+  add("path",{d:ml,fill:"none",stroke:"var(--accent)","stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"});
+  add("circle",{cx:X(n-1),cy:Y(inst.med[n-1]),r:4.5,fill:"var(--accent)",stroke:"var(--surface)","stroke-width":2});
+
+  const hx=add("line",{x1:0,x2:0,y1:P.t,y2:P.H-P.b,stroke:"var(--ink2)","stroke-width":1,opacity:0});
+  const hd=add("circle",{cx:0,cy:0,r:4.5,fill:"var(--surface)",stroke:"var(--accent)","stroke-width":2,opacity:0});
+  const hit=add("rect",{x:P.l,y:P.t,width:P.W-P.l-P.r,height:P.H-P.t-P.b,fill:"transparent",style:"cursor:crosshair"});
+  const tip=$("#tip"), wrap=$("#plotwrap");
+  hit.addEventListener("pointermove",ev=>{
+    const bb=svg.getBoundingClientRect();
+    let i=wn>1?w0+Math.round(((ev.clientX-bb.left)*(P.W/bb.width)-P.l)/(sp/(wn-1))):n-1;
+    i=Math.max(w0,Math.min(n-1,i));
+    const r=runs[i], d=inst.med[i]/baseArr[sel]-1;
+    hx.setAttribute("x1",X(i)); hx.setAttribute("x2",X(i)); hx.setAttribute("opacity",".35");
+    hd.setAttribute("cx",X(i)); hd.setAttribute("cy",Y(inst.med[i])); hd.setAttribute("opacity","1");
+    tip.innerHTML=reportHead(r)
+      +'<div class="r"><span>median</span><b>'+fmtTime(inst.med[i])+'</b></div>'
+      +'<div class="r"><span>p25 – p75</span><b>'+fmtTime(inst.p25[i])+" – "+fmtTime(inst.p75[i])+'</b></div>'
+      +'<div class="r"><span>CV of repetitions</span><b>'+(inst.cvA[i]*100).toFixed(2)+' %</b></div>'
+      +'<div class="r"><span>Δ vs baseline</span><b class="'+(d>0?"up":"down")+'">'+pct(d,2)+'</b></div>';
+    tip.classList.add("on");
+    const off=wrap.getBoundingClientRect();
+    const px=X(i)*(bb.width/P.W)+(bb.left-off.left), py=Y(inst.med[i])*(bb.height/P.H)+(bb.top-off.top);
+    tip.style.left=Math.max(6,Math.min(off.width-tip.offsetWidth-6,px+14))+"px";
+    tip.style.top=Math.max(6,py-18)+"px";
+  });
+  hit.addEventListener("pointerleave",()=>{tip.classList.remove("on");hx.setAttribute("opacity",0);hd.setAttribute("opacity",0);});
+
+  $("#legend").innerHTML=
+     '<span><i class="key" style="border-color:var(--accent)"></i>median of '+REPS+' repetitions</span>'
+    +'<span><i class="key sw" style="background:var(--accent-band)"></i>p25 – p75</span>'
+    +'<span><i class="key" style="border-color:var(--muted); border-top-style:dashed"></i>baseline — '+winLabel(baseWin)+', '+backLabel()+'</span>'
+    +'<span><i class="key" style="border-color:var(--crit); border-top-style:dashed"></i>regression threshold '+thrPct(THRESHOLD)+'</span>'
+    +(a.cp&&a.cp.k>=w0&&a.sev!=="stable"?'<span><i class="key" style="border-color:'+SEV[a.sev].color+'; border-top-style:dashed"></i>change point</span>':"");
+}
+/* Absolute times differ by an order of magnitude between boards, so the
+   cross-board view plots Δ against each board's own baseline instead. Boards
+   share no columns either: this is the one view with a time axis — every
+   board's points sit at their own timestamps on one calendar, the display
+   window's days. */
+function renderBoards(){
+  const inst=insts[sel], svg=$("#bplot");
+  const cols=["var(--s1)","var(--s2)","var(--s3)"];
+  const DAY=86400000;
+  let tEnd=0;
+  const series=inst.boards.map(bid=>{
+    const bd=BOARDS.find(b=>b.id===bid), rs=bd.runs, s=inst.s[bid];
+    const {at,from}=baseIndices(rs), base=windowMedian(s.med,from,at+1);
+    const pts=[];
+    for(let k=0;k<rs.length;k++){
+      if(rs[k].dn<winCut) continue;
+      const t=rs[k].date.getTime(); if(t>tEnd) tEnd=t;
+      pts.push({t,d:s.med[k]/base-1,v:s.med[k],run:rs[k]});
+    }
+    return {bid,pts,base,col:cols[BOARDS.findIndex(b=>b.id===bid)%cols.length]};
+  }).filter(s=>s.pts.length);
+  // the axis: from the first day of the window to the end of the last day any
+  // board reported on — a span of whole days, never zero
+  const T0=winCut*DAY, T1=(Math.floor(tEnd/DAY)+1)*DAY, nDays=Math.round((T1-T0)/DAY);
+  let lo=0,hi=0;
+  series.forEach(s=>s.pts.forEach(p=>{ if(p.d<lo)lo=p.d; if(p.d>hi)hi=p.d; }));
+  const pad=Math.max(0.01,(hi-lo)*0.12); lo-=pad; hi+=pad;
+  const ticks=niceTicks(lo,hi,5); lo=ticks[0]; hi=ticks[ticks.length-1];
+  const sp=P.W-P.l-P.r;
+  const X=t=>P.l+(t-T0)/(T1-T0)*sp, Y=v=>P.t+(1-(v-lo)/(hi-lo))*(P.H-P.t-P.b);
+  svg.innerHTML="";
+  const add=(tag,at,txt)=>{const e=document.createElementNS(NS,tag);for(const k in at)e.setAttribute(k,at[k]);
+    if(txt!==undefined)e.textContent=txt; svg.appendChild(e); return e;};
+  ticks.forEach(v=>{ add("line",{x1:P.l,x2:P.W-P.r,y1:Y(v),y2:Y(v),stroke:"var(--rule)","stroke-width":1});
+    add("text",{x:P.l-9,y:Y(v)+4,"text-anchor":"end","font-size":12,fill:"var(--muted)","font-family":"var(--mono)"},(v*100).toFixed(0)+" %"); });
+  add("line",{x1:P.l,x2:P.W-P.r,y1:Y(0),y2:Y(0),stroke:"var(--rule-2)","stroke-width":1});
+  [THRESHOLD,-THRESHOLD].forEach(v=>{ if(v<lo||v>hi) return;
+    add("line",{x1:P.l,x2:P.W-P.r,y1:Y(v),y2:Y(v),stroke:v>0?"var(--crit)":"var(--good)","stroke-width":1,"stroke-dasharray":"5 4","stroke-opacity":.55}); });
+  // the active board's baseline window, by the time of its columns
+  if(baseAt>=w0){
+    const bx=Math.max(P.l,X(runs[baseFrom].date.getTime())), bw=Math.max(2,Math.min(P.W-P.r,X(runs[baseAt].date.getTime()))-bx);
+    add("rect",{x:bx,y:P.t,width:bw,height:P.H-P.t-P.b,fill:"var(--ink2)","fill-opacity":.07});
+    add("text",{x:Math.max(P.l+62,bx+bw/2),y:P.t+13,"text-anchor":"middle","font-size":10.5,fill:"var(--ink2)","font-family":"var(--cond)","letter-spacing":".06em"},"BASELINE WINDOW");
+  }
+  // day labels along the calendar, at the start of each labelled day
+  const dstep=Math.max(1,Math.ceil(nDays/6));
+  for(let d=0;d<nDays;d+=dstep) add("text",{x:X(T0+d*DAY),y:P.H-30,"text-anchor":"middle","font-size":12,fill:"var(--muted)"},DFMT.format(new Date(T0+d*DAY)));
+  series.forEach(s=>{
+    let d="";
+    s.pts.forEach((p,j)=>{ d+=(j?"L":"M")+X(p.t).toFixed(1)+" "+Y(p.d).toFixed(1)+" "; });
+    add("path",{d,fill:"none",stroke:s.col,"stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"});
+    const last=s.pts[s.pts.length-1];
+    add("circle",{cx:X(last.t),cy:Y(last.d),r:4,fill:s.col,stroke:"var(--surface)","stroke-width":2});
+    add("text",{x:X(last.t)-6,y:Y(last.d)-9,"text-anchor":"end","font-size":11.5,fill:s.col,"font-family":"var(--mono)"},s.bid);
+  });
+  const hx=add("line",{x1:0,x2:0,y1:P.t,y2:P.H-P.b,stroke:"var(--ink2)","stroke-width":1,opacity:0});
+  const hit=add("rect",{x:P.l,y:P.t,width:P.W-P.l-P.r,height:P.H-P.t-P.b,fill:"transparent",style:"cursor:crosshair"});
+  const tip=$("#tip"), wrap=$("#plotwrap");
+  hit.addEventListener("pointermove",ev=>{
+    const bb=svg.getBoundingClientRect();
+    const t=T0+((ev.clientX-bb.left)*(P.W/bb.width)-P.l)/sp*(T1-T0);
+    // each board's point nearest in time to the pointer; the cursor sits on
+    // the nearest of those
+    const near=series.map(s=>{ let best=s.pts[0]; s.pts.forEach(p=>{ if(Math.abs(p.t-t)<Math.abs(best.t-t)) best=p; }); return {s,p:best}; });
+    let cur=near[0]; near.forEach(n=>{ if(Math.abs(n.p.t-t)<Math.abs(cur.p.t-t)) cur=n; });
+    hx.setAttribute("x1",X(cur.p.t)); hx.setAttribute("x2",X(cur.p.t)); hx.setAttribute("opacity",".35");
+    tip.innerHTML=reportHead(cur.p.run)
+      +near.map(n=>'<div class="r"><span style="color:'+n.s.col+'">'+n.s.bid+' <span style="color:var(--muted)">'+DTFMT.format(n.p.run.date)+'</span></span><b class="'+(n.p.d>0?"up":"down")+'">'
+        +pct(n.p.d,2)+' <span style="color:var(--muted)">'+fmtTime(n.p.v)+"</span></b></div>").join("");
+    tip.classList.add("on");
+    const off=wrap.getBoundingClientRect();
+    const px=X(cur.p.t)*(bb.width/P.W)+(bb.left-off.left);
+    tip.style.left=Math.max(6,Math.min(off.width-tip.offsetWidth-6,px+14))+"px";
+    tip.style.top="14px";
+  });
+  hit.addEventListener("pointerleave",()=>{tip.classList.remove("on");hx.setAttribute("opacity",0);});
+  $("#legend").innerHTML=series.map(s=>'<span><i class="key" style="border-color:'+s.col+'"></i>'+s.bid
+      +' · baseline '+fmtTime(s.base)+"</span>").join("")
+    +'<span><i class="key" style="border-color:var(--crit); border-top-style:dashed"></i>±'+thrPct(THRESHOLD).slice(1)+' regression threshold</span>'
+    +"<span>each board is measured against its own baseline — absolute times differ by an order of magnitude — and drawn at its own launch times</span>";
+}
+function niceTicks(lo,hi,count){
+  const span=hi-lo||1, raw=span/count, mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const norm=raw/mag, step=(norm<1.5?1:norm<3?2:norm<7?5:10)*mag;
+  const s=Math.floor(lo/step)*step, out=[];
+  for(let v=s;v<=hi+step*0.5;v+=step) out.push(v);
+  return out;
+}
+function renderTable(){
+  const inst=insts[sel], n=NRUNS;
+  let rows="";
+  for(let i=n-1;i>=Math.max(w0,n-28);i--){
+    const r=runs[i], d=inst.med[i]/baseArr[sel]-1;
+    rows+="<tr><td>"+DTFMT.format(r.date)+"</td><td>"+fmtTime(inst.med[i])
+      +"</td><td>"+fmtTime(inst.p25[i])+"</td><td>"+fmtTime(inst.p75[i])+"</td><td>"+(inst.cvA[i]*100).toFixed(2)
+      +'</td><td class="'+(SNAPSHOT?"flat":d>0?"up":"down")+'">'+(SNAPSHOT?"—":pct(d,2))+"</td></tr>";
+  }
+  $("#tablewrap").innerHTML='<table class="dt"><thead><tr><th>Report</th><th>Median</th><th>p25</th><th>p75</th><th>CV, %</th><th>Δ vs baseline</th></tr></thead><tbody>'+rows+"</tbody></table>";
+}
+
+/* ============================ detail + reaction ============================ */
+function badge(sev,label){return '<span class="badge b-'+sev+'"><span class="dot" style="background:'+SEV[sev].color+'"></span>'+(label||SEV[sev].txt)+"</span>";}
+const noisyBadge=a=>a.noisy?' <span class="badge b-noisy" title="median CV of the last 20 reports">noisy channel · CV '+(a.noiseCv*100).toFixed(1)+' %</span>':"";
+function renderDetail(){
+  const inst=insts[sel], a=A[sel], cp=a.cp, fam=famIndex.get(inst.fam);
+  $("#tr-name").textContent=inst.name;
+  $("#tr-sub").textContent=(inst.group?inst.group+" · ":"")+(inst.reps||REPS)+" repetitions · "+fmtInt(inst.iters)+" iterations";
+  $("#tr-fam").textContent="family "+inst.fam+": "+fam.ids.length+" instances"+(fam.regressed?", "+fam.regressed+" regressed":"");
+  $("#tr-metric").textContent="Median "+METRIC;
+  $("#tr-now").textContent=fmtTime(a.last);
+  const dEl=$("#tr-delta"); const d=dBase[sel];
+  dEl.textContent=SNAPSHOT?"—":pct(d); dEl.className="big mono "+(SNAPSHOT||Math.abs(d)<0.01?"flat":d>0?"up":"down");
+  // both times and the throughput counters come from the payload; a report
+  // carries bytes/items per second only when the benchmark set them, and then
+  // the row is dropped rather than guessed — a guess is not a measurement
+  const rt=inst.rt||0;
+  let thr=null;
+  if(inst.bps) thr={l:"bytes_per_second", v:(inst.bps/1e9).toFixed(2)+" GB/s"};
+  else if(inst.ips) thr={l:"items_per_second", v:(inst.ips/1e6).toFixed(2)+" M/s"};
+  $("#tr-facts").innerHTML=[
+    {l:"Δ window 8×8", v:SNAPSHOT?"—":pct(a.dWin,2)},
+    {l:"p-value", v:SNAPSHOT?"—":fmtP(a.p)},
+    {l:"Channel noise (CV)", v:(a.noiseCv*100).toFixed(2)+" %"},
+    rt?{l:OTHER, v:fmtTime(rt)}:null,
+    thr,
+    {l:"threads", v:String(inst.threads)},
+    {l:"runs on", v:inst.boards.join(", ")}
+  ].filter(Boolean).map(f=>'<div><span class="lbl">'+f.l+"</span><b>"+f.v+"</b></div>").join("");
+
+  $("#vd-head").innerHTML=badge(a.sev)+noisyBadge(a)+' <span style="color:var(--ink2)">'
+    +(cp&&a.sev!=="stable"
+      ? 'step located at the report of '+DTFMT.format(runs[cp.k].date)
+      : SNAPSHOT ? 'single report &mdash; nothing to compare against; what is shown is this report\'s spread across '+(inst.reps||REPS)+' repetitions'
+      : a.noisy ? 'nothing beyond this channel\'s own scatter in the last 22 reports &mdash; a step here has to clear 1.5·CV to count'
+      : 'no change above noise in the last 22 reports')+'</span>';
+  $("#vd-stats").innerHTML=cp?[
+    {l:"Before", v:fmtTime(cp.mb)+" ×"+cp.nb},
+    {l:"After", v:fmtTime(cp.ma)+" ×"+cp.na},
+    {l:"Ratio", v:"×"+cp.ratio.toFixed(4)},
+    {l:"Effect / noise", v:cp.z.toFixed(1)+"σ"},
+    {l:"Separation", v:"t = "+cp.t.toFixed(1)},
+    {l:"Mann–Whitney p", v:fmtP(cp.p)}
+  ].map(f=>'<div><span class="lbl">'+f.l+"</span><b>"+f.v+"</b></div>").join(""):"";
+
+  const u=unitOf(a.last), k=u==="ns"?1:u==="us"?1e3:1e6;
+  const rec={name:inst.name+"_median",run_name:inst.name,run_type:"aggregate",
+    repetitions:inst.reps||REPS,aggregate_name:"median",aggregate_unit:"time",
+    iterations:inst.iters,threads:inst.threads};
+  if(rt) rec[OTHER]=+(rt/k).toFixed(4);
+  rec[METRIC]=+(a.last/k).toFixed(4);
+  rec.time_unit=u;
+  if(inst.bps) rec.bytes_per_second=inst.bps;
+  if(inst.ips) rec.items_per_second=inst.ips;
+  $("#vd-json").textContent=JSON.stringify(rec,null,1);
+
+}
+
+/* ============================ render all ============================ */
+function showView(){
+  const isTable=view==="table";
+  $("#plotwrap").hidden=isTable; $("#tablewrap").hidden=!isTable; $("#legend").hidden=isTable;
+  // the two plots are <svg>: `hidden` is an HTMLElement property, on an
+  // SVGElement it is an expando that changes nothing — the attribute it is
+  $("#plot").toggleAttribute("hidden",view!=="chart"); $("#bplot").toggleAttribute("hidden",view!=="boards");
+  ["chart","boards","table"].forEach(v=>$("#v-"+v).setAttribute("aria-pressed",String(view===v)));
+  if(view==="chart") renderPlot(); else if(view==="boards") renderBoards(); else renderTable();
+}
+/* The selectors' option lists follow the active board, so they are drawn on
+   every render rather than once at boot. */
+function renderControls(){
+  $("#basesel").innerHTML=BASE_OPTS.length
+    ? options(BASE_OPTS,baseBack,v=>"−"+v+" days")
+    : options([baseBack],baseBack,()=>"oldest report");
+  $("#basewin").innerHTML=options(BASEWIN_OPTS,baseWin,winLabel);
+  $("#winsel").innerHTML=options(WIN_OPTS,winDays,v=>"last "+v+(v===1?" day":" days"));
+  for(const id of ["basesel","basewin","winsel"]) $("#"+id).disabled=SNAPSHOT;
+  if(!BASE_OPTS.length) $("#basesel").disabled=true;
+}
+function renderAll(){
+  renderControls();
+  renderFilters(); renderOverview(); rebuild(); renderWindow(); renderDetail();
+  showView();
+  const r=runs[runs.length-1];
+  $("#ro-run").textContent=DTFMT.format(r.date);
+  // the file the board's latest numbers were actually read from
+  const bm=BOARDS.find(b=>b.id===board);
+  $("#ro-report").textContent=bm.report;
+  $("#boardsel").innerHTML=BOARDS.map(b=>'<option value="'+esc(b.id)+'"'+(b.id===board?" selected":"")
+    +">"+esc(b.id)+"</option>").join("");
+  // options carry no tooltip of their own, so the board's coverage and host
+  // ride on the select itself
+  $("#boardsel").title=bm?[bm.note,bm.host].filter(Boolean).join(" · "):"";
+  $("#ro-suite").textContent=fmtInt(activeIds.length)+" in "+famIndex.size+" families";
+}
+
+/* ============================ events ============================ */
+$("#chips").addEventListener("click",e=>{const b=e.target.closest("button.chip");if(!b)return;
+  sevFilter=sevFilter===b.dataset.f?"all":b.dataset.f;
+  renderFilters(); rebuild(); $("#vp").scrollTop=0; renderWindow();});
+$("#vp").addEventListener("click",e=>{
+  const g=e.target.closest("button.vgrp");
+  if(g){ const f=g.dataset.fam; if(collapsed.has(f))collapsed.delete(f); else collapsed.add(f); rebuild(); renderWindow(); return; }
+  const r=e.target.closest("button.vrow");
+  if(r){ sel=+r.dataset.i; renderDetail(); showView(); renderWindow(); }
+});
+let qt=null;
+$("#q").addEventListener("input",e=>{ clearTimeout(qt); const v=e.target.value.trim().toLowerCase();
+  qt=setTimeout(()=>{query=v; rebuild(); $("#vp").scrollTop=0; renderWindow();},120); });
+$("#g-fam").addEventListener("click",()=>{grouped=true;$("#g-fam").setAttribute("aria-pressed","true");$("#g-flat").setAttribute("aria-pressed","false");rebuild();$("#vp").scrollTop=0;renderWindow();});
+$("#g-toggle").addEventListener("click",()=>{
+  if(collapsed.size>=famIndex.size) collapsed.clear();
+  else famIndex.forEach((e,f)=>collapsed.add(f));
+  rebuild(); $("#vp").scrollTop=0; renderWindow();});
+$("#g-flat").addEventListener("click",()=>{grouped=false;$("#g-flat").setAttribute("aria-pressed","true");$("#g-fam").setAttribute("aria-pressed","false");rebuild();$("#vp").scrollTop=0;renderWindow();});
+["chart","boards","table"].forEach(v=>$("#v-"+v).addEventListener("click",()=>{view=v;showView();}));
+$("#boardsel").addEventListener("change",e=>{
+  if(e.target.value===board) return;
+  useBoard(e.target.value); renderAll();});
+$("#tr-fam").addEventListener("click",()=>{$("#q").value=insts[sel].fam;query=insts[sel].fam.toLowerCase();
+  sevFilter="all";renderFilters();rebuild();$("#vp").scrollTop=0;renderWindow();});
+$("#basesel").addEventListener("change",e=>{baseBack=+e.target.value;recomputeBaseline();computeOverview();renderAll();});
+$("#winsel").addEventListener("change",e=>{winDays=+e.target.value;recomputeWindow();renderAll();});
+$("#thrsel").addEventListener("change",e=>{THRESHOLD=+e.target.value;recomputeVerdicts();renderAll();});
+$("#basewin").addEventListener("change",e=>{baseWin=+e.target.value;recomputeBaseline();computeOverview();renderAll();});
+$("#m-base").addEventListener("click",()=>{heatMode="base";$("#m-base").setAttribute("aria-pressed","true");$("#m-prev").setAttribute("aria-pressed","false");renderOverview();});
+$("#m-moved").addEventListener("click",()=>{heatMoved=!heatMoved;$("#m-moved").setAttribute("aria-pressed",String(heatMoved));renderOverview();});
+$("#m-prev").addEventListener("click",()=>{heatMode="prev";$("#m-prev").setAttribute("aria-pressed","true");$("#m-base").setAttribute("aria-pressed","false");renderOverview();});
+
+/* ============================ boot ============================ */
+$("#thrsel").innerHTML=options(THR_OPTS,THRESHOLD,thrPct);
+sel=-1;                    // useBoard picks the worst open regression on the board
+useBoard(BOARDS[0].id);
+renderAll();
+})();
+</script>

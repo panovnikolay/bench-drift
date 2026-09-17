@@ -1,0 +1,14 @@
+# build outputs (pip install . / python -m build)
+build/
+*.egg-info/
+
+# caches and environments
+__pycache__/
+*.pyc
+.venv/
+
+# regenerable test corpus: python3 tests/make_sample_runs.py
+sample-runs/
+
+# local notes and specs
+.scratch/
