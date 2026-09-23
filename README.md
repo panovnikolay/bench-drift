@@ -16,7 +16,6 @@ needed, and no internet either — the page loads nothing.
 Python 3.11 or newer, nothing else.
 
 ```sh
-git clone <repo-url> bench-drift
 python3 -m venv .venv
 .venv/bin/pip install bench-drift/
 .venv/bin/bench-drift --version        # bench-drift 0.1.0
