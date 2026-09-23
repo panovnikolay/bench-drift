@@ -37,12 +37,45 @@ function loadModel(payload){
   return fn({BENCH_DRIFT_DATA:payload}, {querySelector:()=>null});
 }
 
+/* The utility and the two generators as subprocesses. Each throws on a
+   non-zero exit with the process's stderr, so a broken build fails the test
+   that needed it rather than the first assertion after. */
+const {spawnSync}=require("child_process");
+function py(script, args, opts){
+  const r=spawnSync("python3",[path.join(ROOT,script),...args],{encoding:"utf8",cwd:ROOT,...opts});
+  if(r.status!==0) throw new Error(script+" failed: "+r.stderr);
+  return r;
+}
+/* bench-drift with the given arguments — -o, --dump, --board … — in cwd
+   (the repository root by default; the page prints report paths relative to it) */
+function benchDrift(args, cwd){ return py("bench-drift", args, cwd?{cwd}:{}); }
+/* the payload bench-drift builds from the given --board (and other) arguments */
+function dumpPayload(args){
+  const out=path.join(tmpdir("bd-payload-"),"payload.json");
+  benchDrift(["--dump",out,...args]);
+  return JSON.parse(fs.readFileSync(out,"utf8"));
+}
+/* a history built from tests/real_sample.json by tests/reports_from_sample.py:
+   N reports a day apart, a +15 % step planted on BM_TestB/32768 from report
+   N−5, one board — qemu-x86_64 — that --board must still name */
+function makeHistory(reports, dir){
+  dir=dir||tmpdir("bd-real-");
+  py("tests/reports_from_sample.py", [dir,"--reports",String(reports)]);
+  return dir;
+}
+/* one report: a folder holding tests/real_sample.json and nothing else */
+function makeSnapshot(dir){
+  dir=dir||tmpdir("bd-one-");
+  fs.mkdirSync(path.join(dir,"q"),{recursive:true});
+  fs.copyFileSync(path.join(ROOT,"tests","real_sample.json"), path.join(dir,"q","real_sample.json"));
+  return dir;
+}
+
 /* A corpus of reports from tests/make_sample_runs.py, N days, three boards,
    in a temp directory of its own; and the --board arguments that feed it to
    the utility. Boards are named on the command line and nowhere else — one
    --board per subfolder — and the page opens on the first board given, so
    qemu-x86 (every benchmark) goes first. */
-const {spawnSync}=require("child_process");
 const BOARD_ORDER=["qemu-x86","board1","board2"];
 function boardArgs(dir){
   return fs.readdirSync(dir).filter(d=>fs.statSync(path.join(dir,d)).isDirectory())
@@ -51,8 +84,7 @@ function boardArgs(dir){
 }
 function makeCorpus(days, dir){
   dir=dir||tmpdir("bd-corpus-");
-  const r=spawnSync("python3",[path.join(ROOT,"tests","make_sample_runs.py"),"--days",String(days),"--out",dir],{encoding:"utf8"});
-  if(r.status!==0) throw new Error("make_sample_runs.py failed: "+r.stderr);
+  py("tests/make_sample_runs.py", ["--days",String(days),"--out",dir]);
   return dir;
 }
 
@@ -67,4 +99,5 @@ function noisyCount(m){
   return n;
 }
 
-module.exports={loadModel, sevCounts, noisyCount, tmpdir, boardArgs, makeCorpus, ROOT};
+module.exports={loadModel, sevCounts, noisyCount, tmpdir, ROOT,
+  benchDrift, dumpPayload, boardArgs, makeCorpus, makeHistory, makeSnapshot};

@@ -8,8 +8,8 @@
    corpus numbers pinned here are written down in CLAUDE.md under "The test
    corpus" — when one legitimately changes, change it there first. */
 const test=require("node:test"), assert=require("node:assert/strict");
-const fs=require("fs"), path=require("path"), {spawnSync}=require("child_process");
-const {loadModel, sevCounts, noisyCount, tmpdir, boardArgs, makeCorpus, ROOT}=require("./model.js");
+const fs=require("fs"), path=require("path");
+const {loadModel, sevCounts, noisyCount, tmpdir, dumpPayload, boardArgs, makeCorpus, makeHistory, makeSnapshot}=require("./model.js");
 
 /* one corpus per day count per process — the model is small (37 benchmarks),
    the generator and the dump are what cost time */
@@ -17,12 +17,19 @@ const corpora=new Map();
 function corpus(days){
   if(corpora.has(days)) return corpora.get(days);
   const dir=makeCorpus(days);
-  const out=path.join(dir,"payload.json");
-  const dump=spawnSync("python3",[path.join(ROOT,"bench-drift"),"--dump",out,...boardArgs(dir)],{encoding:"utf8",cwd:ROOT});
-  assert.equal(dump.status, 0, dump.stderr);
-  const c={dir, payload:JSON.parse(fs.readFileSync(out,"utf8"))};
+  const c={dir, payload:dumpPayload(boardArgs(dir))};
   corpora.set(days, c);
   return c;
+}
+
+/* a payload of one board, one benchmark, two reports — the smallest history
+   there is, with the dates and the two medians given */
+function twoReports(dates, med){
+  const runs=dates.map((date,i)=>({date, day:date.slice(0,10), report:"ab"[i]+".json"}));
+  return {metric:"cpu_time", reps:2,
+    boards:[{id:"b", host:"", note:"", report:"b.json", runs}],
+    benchmarks:[{name:"BM_A/1", fam:"BM_A", tmpl:"", arg:1, threads:1, group:"g",
+      s:{b:{med, p25:med, p75:med, cv:[0,0], iters:1, reps:2}}}]};
 }
 
 /* The 90-day corpus is 91 reports on qemu-x86: day 85 (five from the end)
@@ -61,10 +68,7 @@ test("a 1-day window holds every point of the latest day", ()=>{
   const {dir}=corpus(90), src=path.join(dir,"qemu-x86"), cut=tmpdir("bd-lastday-");
   fs.mkdirSync(path.join(cut,"qemu-x86"));
   for(const f of fs.readdirSync(src).sort().slice(0,RERUN+1)) fs.copyFileSync(path.join(src,f), path.join(cut,"qemu-x86",f));
-  const out=path.join(cut,"payload.json");
-  const dump=spawnSync("python3",[path.join(ROOT,"bench-drift"),"--dump",out,"--board","qemu-x86="+path.join(cut,"qemu-x86")],{encoding:"utf8",cwd:ROOT});
-  assert.equal(dump.status, 0, dump.stderr);
-  const m=loadModel(JSON.parse(fs.readFileSync(out,"utf8")));
+  const m=loadModel(dumpPayload(["--board","qemu-x86="+path.join(cut,"qemu-x86")]));
   m.run("winDays=1; recomputeWindow();");
   assert.equal(m.get("NRUNS"), RERUN+1);
   assert.equal(m.get("runs")[RERUN-1].day, m.get("runs")[RERUN].day, "the last two columns are one day");
@@ -77,13 +81,7 @@ test("a 1-day window holds every point of the latest day", ()=>{
 test("the day of a report is the day it says, in its own offset, not the UTC day", ()=>{
   // a launch at 02:00+03:00 is 23:00 UTC the evening before: by UTC the two
   // reports share a day, by the report's own clock they are two days
-  const runs=[{date:"2026-09-10T03:00:00+03:00", day:"2026-09-10", report:"a.json"},
-              {date:"2026-09-11T02:00:00+03:00", day:"2026-09-11", report:"b.json"}];
-  const payload={metric:"cpu_time", reps:2,
-    boards:[{id:"b", host:"", note:"", report:"b.json", runs}],
-    benchmarks:[{name:"BM_A/1", fam:"BM_A", tmpl:"", arg:1, threads:1, group:"g",
-      s:{b:{med:[1,1], p25:[1,1], p75:[1,1], cv:[0,0], iters:1, reps:2}}}]};
-  const m=loadModel(payload);
+  const m=loadModel(twoReports(["2026-09-10T03:00:00+03:00","2026-09-11T02:00:00+03:00"], [1,1]));
   assert.deepEqual(m.get("runs").map(r=>r.day), ["2026-09-10","2026-09-11"]);
   assert.deepEqual(m.get("WIN_OPTS"), [3,1]);              // a span of two days
   m.run("winDays=1; recomputeWindow();");
@@ -170,13 +168,7 @@ test("baseline offsets no report can reach are not offered", ()=>{
   assert.deepEqual(m.get("BASE_OPTS"), [7,14,30]);
   // two reports on one day, hours apart: no offset is reachable, the
   // reference is the oldest report and the selector has nothing to offer
-  const runs=[{date:"2026-09-10T03:00:00+03:00", day:"2026-09-10", report:"a.json"},
-              {date:"2026-09-10T08:00:00+03:00", day:"2026-09-10", report:"b.json"}];
-  const payload={metric:"cpu_time", reps:2,
-    boards:[{id:"b", host:"", note:"", report:"b.json", runs}],
-    benchmarks:[{name:"BM_A/1", fam:"BM_A", tmpl:"", arg:1, threads:1, group:"g",
-      s:{b:{med:[1,1.1], p25:[1,1.1], p75:[1,1.1], cv:[0,0], iters:1, reps:2}}}]};
-  m=loadModel(payload);
+  m=loadModel(twoReports(["2026-09-10T03:00:00+03:00","2026-09-10T08:00:00+03:00"], [1,1.1]));
   m.run("useBoard('b');");
   assert.deepEqual(m.get("BASE_OPTS"), []);
   assert.deepEqual([m.get("baseFrom"),m.get("baseAt")], [0,0]);
@@ -287,13 +279,8 @@ test("real data: per-board facts follow useBoard and match the reports", ()=>{
 test("real report: a history built from real_sample.json — step found, noisy channel flagged", ()=>{
   // the real report as the template: 14 reports a day apart, one planted +15 % step
   // from report 9, every other benchmark drifting within a percent
-  const dir=tmpdir("bd-real-");
-  let r=spawnSync("python3",[path.join(ROOT,"tests","reports_from_sample.py"),dir,"--reports","14"],{encoding:"utf8"});
-  assert.equal(r.status, 0, r.stderr);
-  const out=path.join(dir,"payload.json");
-  r=spawnSync("python3",[path.join(ROOT,"bench-drift"),"--dump",out,"--board","qemu-x86_64="+dir],{encoding:"utf8",cwd:ROOT});
-  assert.equal(r.status, 0, r.stderr);
-  const m=loadModel(JSON.parse(fs.readFileSync(out,"utf8")));
+  const dir=makeHistory(14);
+  const m=loadModel(dumpPayload(["--board","qemu-x86_64="+dir]));
   assert.equal(m.get("NRUNS"), 14);
   assert.equal(m.get("REPS"), 5);
   assert.deepEqual(m.get("BOARDS").map(b=>b.id), ["qemu-x86_64"]);   // one board, as the report is
@@ -324,12 +311,7 @@ test("real report: a history built from real_sample.json — step found, noisy c
 });
 
 test("snapshot: one report is a page too — no comparison, no verdicts, no NaN", ()=>{
-  const dir=tmpdir("bd-one-");
-  fs.mkdirSync(path.join(dir,"q")); fs.copyFileSync(path.join(ROOT,"tests","real_sample.json"), path.join(dir,"q","real_sample.json"));
-  const out=path.join(dir,"payload.json");
-  const r=spawnSync("python3",[path.join(ROOT,"bench-drift"),"--dump",out,"--board","qemu-x86-64="+dir],{encoding:"utf8",cwd:ROOT});
-  assert.equal(r.status, 0, r.stderr);
-  const m=loadModel(JSON.parse(fs.readFileSync(out,"utf8")));
+  const m=loadModel(dumpPayload(["--board","qemu-x86-64="+makeSnapshot()]));
   assert.equal(m.get("NRUNS"), 1);
   assert.equal(m.get("SNAPSHOT"), true);
   m.run("useBoard('qemu-x86-64'); recomputeBaseline(); rollupFamilies(); computeOverview();");

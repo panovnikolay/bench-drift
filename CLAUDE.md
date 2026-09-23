@@ -136,9 +136,15 @@ locally; CI fails). 91 tests.
 | `tests/browser.test.js` | what is actually drawn in headless Chrome: every window, tooltips, the board dropdown, both baseline settings, the threshold; the audit — header, facts, JSON block and table against raw reports; the page over a real history and over one real report; `--metric real_time`; a counter only when the report carries it; `NaN` in SVG attributes | 10 |
 
 Tooling under `tests/`: `model.js` — `loadModel(payload)` slices the page's
-script and evaluates it in Node with the payload as `window`; `makeCorpus(days)`
-/ `boardArgs(dir)` shared by the two Node tiers; `tmpdir()` removes what it
-made at process exit. `probe.js` is injected into a built page before
+script and evaluates it in Node with the payload as `window`; the subprocess
+helpers shared by the two Node tiers, each throwing with stderr on a non-zero
+exit: `benchDrift(args, cwd)` runs the utility, `dumpPayload(args)` returns
+the payload it builds, `makeCorpus(days)` / `boardArgs(dir)` the generated
+corpus and its `--board` arguments, `makeHistory(reports)` the history from
+`real_sample.json`, `makeSnapshot()` a folder with that one report; `tmpdir()`
+removes what it made at process exit. In `test_serve.py` the same job is done
+by `TempCase` (`self.tmp`) and `CorpusCase` (`self.c.write(board, day, rows)`,
+`self.boards(*names)`), cleaned up by `addCleanup`. `probe.js` is injected into a built page before
 `</body>`, reads a list of steps (`select` / `click` / `input`) from
 `location.hash`, runs them with a 250 ms pause (the catalogue search is
 debounced by 120 ms) and after each step puts a snapshot into `<pre
@@ -206,7 +212,8 @@ The page is large and is edited pointwise:
 - **`NaN` in an SVG attribute is not an error.** See the tests section.
 - **`/tmp` may be a quota'd tmpfs.** If Chrome fails with "no probe output"
   and the shell goes silent: `df -h /tmp`, then `rm -rf /tmp/bd-*`. Every
-  temp directory the tests make has a `bd-` prefix for that sweep.
+  temp directory the tests make — Python (`bd-py-`) and Node alike — has a
+  `bd-` prefix for that sweep.
 - In heredoc check scripts it is easy to leave a template string unclosed —
   the error reads as `Unterminated template`.
 

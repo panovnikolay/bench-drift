@@ -7,7 +7,7 @@
    through all window options, or switch boards, in a single render. */
 const test=require("node:test"), assert=require("node:assert/strict");
 const fs=require("fs"), path=require("path"), {spawnSync}=require("child_process");
-const {ROOT, tmpdir, boardArgs, makeCorpus}=require("./model.js");
+const {tmpdir, benchDrift, boardArgs, makeCorpus, makeHistory, makeSnapshot}=require("./model.js");
 
 const CHROME=["google-chrome","google-chrome-stable","chromium","chromium-browser"]
   .find(c=>spawnSync("which",[c]).status===0);
@@ -55,8 +55,7 @@ function realPage(days, extraArgs, mutate){
   const runs=makeCorpus(days, path.join(d,"runs"));
   if(mutate) mutate(runs);
   const out=path.join(d,"page.html");
-  const r=spawnSync("python3",[path.join(ROOT,"bench-drift"),"-o",out,...(extraArgs||[]),...boardArgs(runs)],{encoding:"utf8",cwd:d});
-  assert.equal(r.status, 0, r.stderr);
+  benchDrift(["-o",out,...(extraArgs||[]),...boardArgs(runs)], d);
   const built={page:out, runs};
   pages.set(key, built);
   return built;
@@ -244,15 +243,12 @@ test("real data: what the header and the fact list show is what the reports say"
 
 test("real report: the page over a history built from real_sample.json", {skip}, ()=>{
   const d=path.join(tmp,"realsample"); fs.mkdirSync(d,{recursive:true});
-  const runs=path.join(d,"runs");
-  let r=spawnSync("python3",[path.join(ROOT,"tests","reports_from_sample.py"),runs,"--reports","14"],{encoding:"utf8"});
-  assert.equal(r.status, 0, r.stderr);
+  const runs=makeHistory(14, path.join(d,"runs"));
   const page=path.join(d,"page.html");
-  r=spawnSync("python3",[path.join(ROOT,"bench-drift"),"-o",page,"--board","qemu-x86_64="+runs],{encoding:"utf8",cwd:d});
-  assert.equal(r.status, 0, r.stderr);
-  const [s0, s1, s2]=render(page, [[["click","#v-table"]],
-                                   [["click","#g-toggle"]],
-                                   [["input","#q","BM_TestB/8388608/repeats:5"]],[["click",".vrow"]]]);
+  benchDrift(["-o",page,"--board","qemu-x86_64="+runs], d);
+  const [s0, s1, , last]=render(page, [[["click","#v-table"]],
+                                       [["click","#g-toggle"]],
+                                       [["input","#q","BM_TestB/8388608/repeats:5"]],[["click",".vrow"]]]);
   // opens on the worst regression: the planted step
   assert.equal(s0.tr.name, "BM_TestB/32768/repeats:5");
   assert.match(s0.verdict, /^regression step located at the report of \w{3} \d\d, \d\d:\d\d/);   // date with time: two reports of one day are told apart
@@ -270,7 +266,6 @@ test("real report: the page over a history built from real_sample.json", {skip},
   // the noisy channel is marked in the catalogue once the families are open
   assert.ok(s1.catCount.startsWith("10 of 10"));
   // the slowest benchmark: 2 iterations of ~457 ms, units in ms
-  const last=render(page, [[["input","#q","BM_TestB/8388608/repeats:5"]],[["click",".vrow"]]])[1];
   assert.equal(last.tr.name, "BM_TestB/8388608/repeats:5");
   assert.match(last.tr.now, / ms$/);
   assert.match(last.tr.sub, /· 2 iterations$/);
@@ -278,11 +273,9 @@ test("real report: the page over a history built from real_sample.json", {skip},
 });
 
 test("snapshot: the page over one real report", {skip}, ()=>{
-  const d=path.join(tmp,"one"); fs.mkdirSync(path.join(d,"q"),{recursive:true});
-  fs.copyFileSync(path.join(ROOT,"tests","real_sample.json"), path.join(d,"q","real_sample.json"));
+  const d=makeSnapshot(path.join(tmp,"one"));
   const page=path.join(d,"page.html");
-  const r=spawnSync("python3",[path.join(ROOT,"bench-drift"),"-o",page,"--board","qemu-x86-64="+d],{encoding:"utf8",cwd:d});
-  assert.equal(r.status, 0, r.stderr);
+  benchDrift(["-o",page,"--board","qemu-x86-64="+d], d);
   const [s0, s1]=render(page, [[["click","#g-toggle"]],[["click","#v-table"]]]);
   assert.equal(s0.ro.suite, "10 in 2 families");
   // the report's own clock (14:09+00:00), not the machine's zone

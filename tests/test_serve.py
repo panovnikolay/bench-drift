@@ -1,9 +1,12 @@
-"""Unit tests for the bench_drift package — the report reader and the payload.
+"""Unit tests for the bench_drift package: name parsing, statistics, the
+report reader, --board discovery, the payload, the config, the CLI as a
+subprocess, the server and the page skeleton.
 
     python3 -m unittest discover -s tests -v
 
 Stdlib only. Reports are fabricated inline, small and to the point; the
-90-day sample corpus is exercised by the Node tests, not here.
+90-day sample corpus is exercised by the Node tests, not here. Every temp
+directory is prefixed bd- (see CLAUDE.md, "Rakes").
 """
 
 import argparse
@@ -12,13 +15,18 @@ import io
 import json
 import os
 import shutil
+import statistics
+import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import bench_drift as bds  # noqa: E402
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+SAMPLE = os.path.join(HERE, "real_sample.json")
+sys.path.insert(0, ROOT)
+import bench_drift as bd  # noqa: E402
 
 
 # ------------------------------------------------------------------ fixtures
@@ -69,7 +77,6 @@ def gb_rows(name, values, unit="ns", iterations=1000, **counters):
     default: the raw rows first, then its aggregates, in one array. This is
     the shape the utility is fed. Keyword counters (bytes_per_second, …) go on
     every row the way the real thing puts them."""
-    import statistics
     s = sorted(values)
     med = s[len(s) // 2] if len(s) % 2 else (s[len(s) // 2 - 1] + s[len(s) // 2]) / 2
     sd = statistics.stdev(values) if len(values) > 1 else 0.0
@@ -85,10 +92,10 @@ def args(**over):
 
 
 class Corpus:
-    """A temp directory of reports: corpus.write(board, day_offset, rows)."""
+    """A directory of reports: corpus.write(board, day_offset, rows)."""
 
-    def __init__(self):
-        self.root = tempfile.mkdtemp(prefix="bds-test-")
+    def __init__(self, root):
+        self.root = root
         self.t0 = datetime(2026, 8, 1, 3, 0, tzinfo=timezone.utc)
 
     def write(self, board, day, rows, **ctx):
@@ -101,9 +108,6 @@ class Corpus:
             json.dump(doc, fh)
         return path
 
-    def cleanup(self):
-        shutil.rmtree(self.root, ignore_errors=True)
-
 
 def quiet(fn, *a, **kw):
     """Run fn with stderr captured; returns (result, stderr_text)."""
@@ -113,11 +117,35 @@ def quiet(fn, *a, **kw):
     return out, buf.getvalue()
 
 
+class TempCase(unittest.TestCase):
+    """A temp directory, self.tmp, that goes away with the test."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="bd-py-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+
+class CorpusCase(TempCase):
+    """A temp corpus of reports, self.c, and --board specs into it."""
+
+    def setUp(self):
+        super().setUp()
+        self.c = Corpus(self.tmp)
+
+    def spec(self, name, sub=""):
+        return "%s=%s" % (name, os.path.join(self.tmp, sub) if sub else self.tmp)
+
+    def boards(self, *names):
+        """discover() over the named subfolders — every subfolder when none is named."""
+        names = names or sorted(d for d in os.listdir(self.tmp) if os.path.isdir(os.path.join(self.tmp, d)))
+        return bd.discover([self.spec(n, n) for n in names])
+
+
 # ----------------------------------------------------------------- the tests
 
 class ParseName(unittest.TestCase):
     def check(self, name, fam, tmpl, arg, threads):
-        self.assertEqual(bds.parse_name(name), (fam, tmpl, arg, threads), name)
+        self.assertEqual(bd.parse_name(name), (fam, tmpl, arg, threads), name)
 
     def test_shapes(self):
         self.check("BM_Base64Decode/256", "BM_Base64Decode", "", 256, 1)
@@ -134,15 +162,14 @@ class ParseName(unittest.TestCase):
 class Summarise(unittest.TestCase):
     def test_raw_repetitions(self):
         vals = [100, 90, 110, 95, 105, 98, 102, 101, 99]
-        med, p25, p75, cv, reps = bds.summarise(vals, {}, 0)
+        med, p25, p75, cv, reps = bd.summarise(vals, {}, 0)
         self.assertEqual(reps, 9)
         self.assertEqual(med, 100)
         self.assertEqual((p25, p75), (98, 102))
-        import statistics
         self.assertAlmostEqual(cv, statistics.stdev(vals) / 100, places=9)   # stdev/median, not /mean
 
     def test_aggregates_only(self):
-        med, p25, p75, cv, reps = bds.summarise([], {"mean": 101, "median": 100, "stddev": 4}, 9)
+        med, p25, p75, cv, reps = bd.summarise([], {"mean": 101, "median": 100, "stddev": 4}, 9)
         self.assertEqual(med, 100)
         self.assertEqual(reps, 9)
         self.assertAlmostEqual(p25, 100 - 0.6745 * 4)
@@ -150,23 +177,17 @@ class Summarise(unittest.TestCase):
         self.assertAlmostEqual(cv, 0.04)                            # sd/median without a cv row
 
     def test_aggregates_cv_row_preferred(self):
-        _, _, _, cv, _ = bds.summarise([], {"median": 100, "stddev": 4, "cv": 0.0396}, 9)
+        _, _, _, cv, _ = bd.summarise([], {"median": 100, "stddev": 4, "cv": 0.0396}, 9)
         self.assertEqual(cv, 0.0396)
 
     def test_single_repetition(self):
-        self.assertEqual(bds.summarise([42.0], {}, 0), (42.0, 42.0, 42.0, 0.0, 1))
+        self.assertEqual(bd.summarise([42.0], {}, 0), (42.0, 42.0, 42.0, 0.0, 1))
 
     def test_nothing_usable(self):
-        self.assertIsNone(bds.summarise([], {"stddev": 1}, 0))
+        self.assertIsNone(bd.summarise([], {"stddev": 1}, 0))
 
 
-class ReadReport(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="bds-rr-")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
+class ReadReport(TempCase):
     def path(self, doc, name="r.json"):
         p = os.path.join(self.tmp, name)
         with open(p, "w", encoding="utf-8") as fh:
@@ -175,7 +196,7 @@ class ReadReport(unittest.TestCase):
 
     def test_units_and_both_times(self):
         rows = gb_rows("BM_A/1", [1.0, 2.0, 3.0], unit="us", iterations=77)
-        meta, vals = bds.read_report(self.path(report(rows)), "cpu_time")
+        meta, vals = bd.read_report(self.path(report(rows)), "cpu_time")
         self.assertEqual(vals["BM_A/1"]["med"], 2000.0)            # us -> ns
         self.assertAlmostEqual(vals["BM_A/1"]["other"], 2200.0)     # real_time, same scaling
         self.assertEqual(vals["BM_A/1"]["iters"], 77)
@@ -185,19 +206,19 @@ class ReadReport(unittest.TestCase):
 
     def test_metric_swap(self):
         rows = iteration_rows("BM_A/1", [10.0, 10.0, 10.0])
-        _, vals = bds.read_report(self.path(report(rows)), "real_time")
+        _, vals = bd.read_report(self.path(report(rows)), "real_time")
         self.assertAlmostEqual(vals["BM_A/1"]["med"], 11.0)
         self.assertAlmostEqual(vals["BM_A/1"]["other"], 10.0)
 
     def test_counters_read_not_guessed(self):
         rows = iteration_rows("BM_A/1", [10.0, 10.0, 10.0], bytes_per_second=5e9)
-        _, vals = bds.read_report(self.path(report(rows)), "cpu_time")
+        _, vals = bd.read_report(self.path(report(rows)), "cpu_time")
         self.assertEqual(vals["BM_A/1"]["bps"], 5e9)
         self.assertIsNone(vals["BM_A/1"]["ips"])
 
     def test_aggregates_only_keeps_iterations(self):
         rows = aggregate_rows("BM_A/1", 101, 100, 4, iterations=555)   # aggregates-only: no raw row to prefer
-        _, vals = bds.read_report(self.path(report(rows)), "cpu_time")
+        _, vals = bd.read_report(self.path(report(rows)), "cpu_time")
         self.assertEqual(vals["BM_A/1"]["iters"], 555)
         self.assertEqual(vals["BM_A/1"]["reps"], 9)
         self.assertAlmostEqual(vals["BM_A/1"]["other"], 110.0)     # median real_time row
@@ -216,7 +237,7 @@ class ReadReport(unittest.TestCase):
                          "aggregate_unit": unit, "iterations": 5, "threads": 1,
                          "real_time": v * 1.1, "cpu_time": v, "time_unit": "ns",
                          "bytes_per_second": 2.4e10 if unit == "time" else 0.0076})
-        _, vals = bds.read_report(self.path(report(rows)), "cpu_time")
+        _, vals = bd.read_report(self.path(report(rows)), "cpu_time")
         v = vals["BM_A/8192"]
         self.assertEqual(v["reps"], 5)
         self.assertEqual(v["med"], 1353.0)
@@ -232,7 +253,7 @@ class ReadReport(unittest.TestCase):
                      "aggregate_name": "cv", "aggregate_unit": "percentage",
                      "iterations": 3, "threads": 1, "real_time": 0.09, "cpu_time": 0.09,
                      "time_unit": "ns"})
-        _, vals = bds.read_report(self.path(report(rows)), "cpu_time")
+        _, vals = bd.read_report(self.path(report(rows)), "cpu_time")
         self.assertEqual(vals["BM_A/1"]["reps"], 3)
         self.assertEqual(vals["BM_A/1"]["med"], 11.0)
 
@@ -240,7 +261,7 @@ class ReadReport(unittest.TestCase):
         rows = aggregate_rows("BM_A/1", 101, 100, 4, iterations=555)
         for r in rows:
             r["bytes_per_second"] = {"mean": 5.1e9, "median": 5.0e9, "stddev": 2e8, "cv": 0.04}[r["aggregate_name"]]
-        _, vals = bds.read_report(self.path(report(rows)), "cpu_time")
+        _, vals = bd.read_report(self.path(report(rows)), "cpu_time")
         self.assertEqual(vals["BM_A/1"]["bps"], 5.0e9)
         self.assertEqual(vals["BM_A/1"]["iters"], 555)
 
@@ -248,101 +269,85 @@ class ReadReport(unittest.TestCase):
         rows = iteration_rows("BM_A/1", [10.0, 10.0])
         rows.append({"name": "BM_B/1", "run_name": "BM_B/1", "error_occurred": True,
                      "error_message": "boom"})
-        (meta, vals), err = quiet(bds.read_report, self.path(report(rows)), "cpu_time")
+        (meta, vals), err = quiet(bd.read_report, self.path(report(rows)), "cpu_time")
         self.assertNotIn("BM_B/1", vals)
         self.assertIn("1 benchmark(s) reported an error", err)
 
     def test_missing_date_falls_back_to_mtime(self):
         doc = report(iteration_rows("BM_A/1", [1.0, 1.0]))
         del doc["context"]["date"]
-        (meta, _), err = quiet(bds.read_report, self.path(doc), "cpu_time")
+        (meta, _), err = quiet(bd.read_report, self.path(doc), "cpu_time")
         self.assertIn("mtime", err)
         self.assertIsNotNone(meta["when"].tzinfo)
 
     def test_not_a_report(self):
-        (got), err = quiet(bds.read_report, self.path({"nope": 1}), "cpu_time")
+        got, err = quiet(bd.read_report, self.path({"nope": 1}), "cpu_time")
         self.assertIsNone(got)
         self.assertIn("not a Google Benchmark report", err)
 
 
-class Discover(unittest.TestCase):
-    """Work 1 of the plan: a file belongs to a board only because --board
-    said so. No layout is read into anything: --board NAME=PATH walks PATH
-    for *.json at any depth, and that is the whole rule."""
-
-    def setUp(self):
-        self.c = Corpus()
-
-    def tearDown(self):
-        self.c.cleanup()
-
-    def spec(self, name, sub=""):
-        return "%s=%s" % (name, os.path.join(self.c.root, sub) if sub else self.c.root)
+class Discover(CorpusCase):
+    """A file belongs to a board only because --board said so. No layout is
+    read into anything: --board NAME=PATH walks PATH for *.json at any depth,
+    and that is the whole rule."""
 
     def test_board_path_is_walked_recursively(self):
         # the pipeline folder: <run>/<board>/<job>/report.json, depth unknown in advance
-        deep = os.path.join(self.c.root, "run-42", "qemu-x86_64", "job-7")
+        deep = os.path.join(self.tmp, "run-42", "qemu-x86_64", "job-7")
         os.makedirs(deep)
         with open(os.path.join(deep, "report.json"), "w") as fh:
             json.dump(report(gb_rows("BM_A/1", [1.0, 1.0])), fh)
-        top = os.path.join(self.c.root, "report.json")
+        top = os.path.join(self.tmp, "report.json")
         with open(top, "w") as fh:
             json.dump(report(gb_rows("BM_A/1", [1.0, 1.0])), fh)
-        boards = bds.discover(["qemu-x86_64=" + self.c.root])
+        boards = bd.discover(["qemu-x86_64=" + self.tmp])
         self.assertEqual([b for b, _ in boards], ["qemu-x86_64"])
-        self.assertEqual(sorted(os.path.relpath(f, self.c.root) for f in boards[0][1]),
+        self.assertEqual(sorted(os.path.relpath(f, self.tmp) for f in boards[0][1]),
                          ["report.json", os.path.join("run-42", "qemu-x86_64", "job-7", "report.json")])
 
     def test_board_order_is_argument_order(self):
         for b in ("zeta", "alpha"):
             self.c.write(b, 0, gb_rows("BM_A/1", [1.0, 1.0]))
-        boards = bds.discover([self.spec("zeta", "zeta"), self.spec("alpha", "alpha")])
+        boards = bd.discover([self.spec("zeta", "zeta"), self.spec("alpha", "alpha")])
         self.assertEqual([b for b, _ in boards], ["zeta", "alpha"])
 
     def test_glob_still_works_as_a_path(self):
         self.c.write("b", 0, gb_rows("BM_A/1", [1.0, 1.0]))
         self.c.write("b", 1, gb_rows("BM_A/1", [1.0, 1.0]))
-        boards = bds.discover(["b=" + os.path.join(self.c.root, "b", "n00*.json")])
+        boards = bd.discover(["b=" + os.path.join(self.tmp, "b", "n00*.json")])
         self.assertEqual(len(boards[0][1]), 2)
 
     def test_same_board_twice_merges_its_files(self):
         self.c.write("x", 0, gb_rows("BM_A/1", [1.0, 1.0]))
         self.c.write("y", 1, gb_rows("BM_A/1", [1.0, 1.0]))
-        boards = bds.discover([self.spec("one", "x"), self.spec("one", "y")])
+        boards = bd.discover([self.spec("one", "x"), self.spec("one", "y")])
         self.assertEqual(len(boards), 1)
         self.assertEqual(len(boards[0][1]), 2)
 
     def test_no_layout_guessing(self):
-        # a folder of board-named subfolders is NOT a set of boards any more
+        # a folder of board-named subfolders is not a set of boards
         self.c.write("qemu-x86_64", 0, gb_rows("BM_A/1", [1.0, 1.0]))
         with self.assertRaises(SystemExit):
-            bds.discover([self.c.root])                    # a bare path is not an argument
-        boards = bds.discover(["all=" + self.c.root])
+            bd.discover([self.tmp])                    # a bare path is not an argument
+        boards = bd.discover(["all=" + self.tmp])
         self.assertEqual([b for b, _ in boards], ["all"])  # it is whatever --board calls it
 
     def test_malformed_and_empty(self):
         with self.assertRaises(SystemExit):
-            bds.discover(["qemu-x86_64"])                  # no '='
-        empty = os.path.join(self.c.root, "empty"); os.makedirs(empty)
+            bd.discover(["qemu-x86_64"])                  # no '='
+        empty = os.path.join(self.tmp, "empty"); os.makedirs(empty)
         with self.assertRaises(SystemExit):
-            bds.discover(["b=" + empty])                   # nothing to read
+            bd.discover(["b=" + empty])                   # nothing to read
         with self.assertRaises(SystemExit):
-            bds.discover([])                               # no boards at all
+            bd.discover([])                               # no boards at all
 
 
-class PayloadCase(unittest.TestCase):
+class PayloadCase(CorpusCase):
     """A temp corpus and the payload the utility builds from it — the seam
     the tests below judge the utility by."""
 
-    def setUp(self):
-        self.c = Corpus()
-
-    def tearDown(self):
-        self.c.cleanup()
-
     def build(self, *names, **over):
-        boards = bds.discover(["%s=%s" % (b, os.path.join(self.c.root, b)) for b in names])
-        return quiet(bds.build_payload, boards, args(**over))
+        return quiet(bd.build_payload, self.boards(*names), args(**over))
 
 
 class ReportsArePoints(PayloadCase):
@@ -352,7 +357,7 @@ class ReportsArePoints(PayloadCase):
     reports — the payload carries them per board, never a shared axis."""
 
     def write_at(self, board, day, hour, rows, name=None, **ctx):
-        d = os.path.join(self.c.root, board); os.makedirs(d, exist_ok=True)
+        d = os.path.join(self.tmp, board); os.makedirs(d, exist_ok=True)
         when = self.c.t0 + timedelta(days=day, hours=hour)
         path = os.path.join(d, name or "n%03d-%02d.json" % (day, hour))
         with open(path, "w", encoding="utf-8") as fh:
@@ -435,7 +440,7 @@ class CalendarDay(PayloadCase):
     in those days: `days` back from the newest report across all boards."""
 
     def write_dated(self, board, name, date, rows=None):
-        d = os.path.join(self.c.root, board); os.makedirs(d, exist_ok=True)
+        d = os.path.join(self.tmp, board); os.makedirs(d, exist_ok=True)
         path = os.path.join(d, name)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(report(rows or gb_rows("BM_A/1", [1.0, 1.0]), date=date), fh)
@@ -501,12 +506,10 @@ class CalendarDay(PayloadCase):
         self.assertEqual(self.days_of(p, "b"), ["2026-08-08"])
 
 
-class BuildPayload(unittest.TestCase):
-    def setUp(self):
-        self.c = Corpus()
-
-    def tearDown(self):
-        self.c.cleanup()
+class BuildPayload(PayloadCase):
+    """The payload over every board in the corpus: columns, carried and
+    backfilled benchmarks, the days bound, per-board facts, groups, a
+    snapshot."""
 
     def fill(self, board, days, names, base=100.0, **kw):
         for d in days:
@@ -515,16 +518,11 @@ class BuildPayload(unittest.TestCase):
                 rows += gb_rows(n, [base * (1 + 0.01 * k) for k in range(5)], **kw)
             self.c.write(board, d, rows)
 
-    def build(self, **over):
-        subs = sorted(d for d in os.listdir(self.c.root) if os.path.isdir(os.path.join(self.c.root, d)))
-        boards = bds.discover(["%s=%s" % (d, os.path.join(self.c.root, d)) for d in subs])
-        return quiet(bds.build_payload, boards, args(**over))
-
     def test_metric_and_runs(self):
         self.fill("small", range(3), ["BM_A/1"])
         self.fill("big", range(3), ["BM_A/1", "BM_B/1", "BM_C/1"])
         p, _ = self.build()
-        self.assertEqual([b["id"] for b in p["boards"]], ["big", "small"])   # argument order (sorted here)
+        self.assertEqual([b["id"] for b in p["boards"]], ["big", "small"])   # argument order (sorted by boards())
         self.assertEqual(p["metric"], "cpu_time")
         self.assertEqual([len(b["runs"]) for b in p["boards"]], [3, 3])
 
@@ -603,10 +601,9 @@ class BuildPayload(unittest.TestCase):
         self.assertEqual(a["s"]["b"]["reps"], 5)
 
     def test_the_real_report_alone_builds(self):
-        d = os.path.join(self.c.root, "one"); os.makedirs(d)
-        shutil.copy(RealSample.SAMPLE, d)
-        boards = bds.discover(["qemu-x86-64=" + d])
-        p, err = quiet(bds.build_payload, boards, args())
+        d = os.path.join(self.tmp, "one"); os.makedirs(d)
+        shutil.copy(SAMPLE, d)
+        p, err = quiet(bd.build_payload, bd.discover(["qemu-x86-64=" + d]), args())
         self.assertEqual(len(p["boards"][0]["runs"]), 1)
         self.assertEqual(len(p["benchmarks"]), 10)
         self.assertEqual(p["boards"][0]["note"], "10 benchmarks · 1 report")
@@ -617,33 +614,30 @@ class BuildPayload(unittest.TestCase):
         self.assertIn("only 3 reports", err); self.assertIn("detector", err)
 
 
-class RealSample(unittest.TestCase):
-    """tests/real_sample.json is a real report with the
-    numbers altered — the shape is the contract, the digits are not the
-    author's: ten benchmarks, five repetitions each, followed by their
-    aggregates, exactly as google/benchmark writes them. The reader must
-    return exactly what the raw rows say, for every benchmark. The pins below
-    were computed from the file with the reader's own formulas."""
-
-    SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "real_sample.json")
+class RealSample(TempCase):
+    """tests/real_sample.json is a real report with the numbers altered — the
+    shape is the contract, the digits are not the author's: ten benchmarks,
+    five repetitions each, followed by their aggregates, exactly as
+    google/benchmark writes them. The reader must return exactly what the raw
+    rows say, for every benchmark. The pins below were computed from the file
+    with the reader's own formulas."""
 
     def test_every_benchmark_matches_the_raw_rows(self):
-        doc = json.load(open(self.SAMPLE, encoding="utf-8"))
-        meta, vals = bds.read_report(self.SAMPLE, "cpu_time")
+        doc = json.load(open(SAMPLE, encoding="utf-8"))
+        meta, vals = bd.read_report(SAMPLE, "cpu_time")
         self.assertEqual(len(vals), 10)
-        import statistics
         for name, v in vals.items():
             raw = [r for r in doc["benchmarks"] if r["run_name"] == name and r["run_type"] == "iteration"]
             self.assertEqual(len(raw), 5, name)
             cpu = sorted(r["cpu_time"] for r in raw)
             self.assertEqual(v["reps"], 5)
-            self.assertAlmostEqual(v["med"], bds.pct(cpu, 0.5), places=9)
-            self.assertAlmostEqual(v["p25"], bds.pct(cpu, 0.25), places=9)
-            self.assertAlmostEqual(v["p75"], bds.pct(cpu, 0.75), places=9)
-            self.assertAlmostEqual(v["cv"], statistics.stdev(cpu) / bds.pct(cpu, 0.5), places=12)
+            self.assertAlmostEqual(v["med"], bd.pct(cpu, 0.5), places=9)
+            self.assertAlmostEqual(v["p25"], bd.pct(cpu, 0.25), places=9)
+            self.assertAlmostEqual(v["p75"], bd.pct(cpu, 0.75), places=9)
+            self.assertAlmostEqual(v["cv"], statistics.stdev(cpu) / bd.pct(cpu, 0.5), places=12)
             self.assertEqual(v["iters"], raw[0]["iterations"])             # never the aggregates' 5
-            self.assertAlmostEqual(v["other"], bds.pct(sorted(r["real_time"] for r in raw), 0.5), places=9)
-            self.assertAlmostEqual(v["bps"], bds.pct(sorted(r["bytes_per_second"] for r in raw), 0.5), places=6)
+            self.assertAlmostEqual(v["other"], bd.pct(sorted(r["real_time"] for r in raw), 0.5), places=9)
+            self.assertAlmostEqual(v["bps"], bd.pct(sorted(r["bytes_per_second"] for r in raw), 0.5), places=6)
             self.assertIsNone(v["ips"])
         # anchors, so a silent change in the file shows up as numbers
         a = vals["BM_TestA/8192/repeats:5"]
@@ -655,7 +649,7 @@ class RealSample(unittest.TestCase):
         heavy = vals["BM_TestB/8388608/repeats:5"]
         self.assertEqual(heavy["iters"], 2)                                  # 457 ms per iteration
         self.assertAlmostEqual(heavy["med"], 456948114.4494994, places=3)
-        self.assertEqual(bds.parse_name("BM_TestA/8388608/repeats:5"), ("BM_TestA", "", 8388608, 1))
+        self.assertEqual(bd.parse_name("BM_TestA/8388608/repeats:5"), ("BM_TestA", "", 8388608, 1))
         self.assertEqual(meta["exe"], "GoogleBenchmarkExample")
         self.assertEqual(meta["host"], "")                                   # empty host_name is fine
         self.assertEqual(meta["when"].isoformat(), "2026-09-09T14:09:10+00:00")
@@ -665,8 +659,7 @@ class RealSample(unittest.TestCase):
         raw rows (mean, median, sample stddev, cv = stddev/mean), and the
         throughput on every raw row is the declared byte count over that
         row's wall time — so the altered numbers still make one report."""
-        import statistics
-        doc = json.load(open(self.SAMPLE, encoding="utf-8"))
+        doc = json.load(open(SAMPLE, encoding="utf-8"))
         rows = doc["benchmarks"]
         names = list(dict.fromkeys(r["run_name"] for r in rows))
         self.assertEqual(len(names), 10)
@@ -674,7 +667,7 @@ class RealSample(unittest.TestCase):
             raw = [r for r in rows if r["run_name"] == name and r["run_type"] == "iteration"]
             aggs = {r["aggregate_name"]: r for r in rows if r["run_name"] == name and r["run_type"] == "aggregate"}
             self.assertEqual(sorted(aggs), ["cv", "mean", "median", "stddev"], name)
-            nbytes = 4 * bds.parse_name(name)[2]                       # sizeof(int) × arg, as the binary declares
+            nbytes = 4 * bd.parse_name(name)[2]                       # sizeof(int) × arg, as the binary declares
             for col in ("real_time", "cpu_time", "bytes_per_second"):
                 v = [r[col] for r in raw]
                 self.assertAlmostEqual(aggs["mean"][col] / statistics.mean(v), 1.0, places=12, msg=(name, col))
@@ -690,37 +683,27 @@ class RealSample(unittest.TestCase):
         payload must keep the real CVs, show the planted step, and take
         per-board facts from the raw rows of the latest report."""
         import reports_from_sample as rfs
-        tmp = tempfile.mkdtemp(prefix="bds-real-")
-        try:
-            rfs.build(tmp, reports=14)                     # one board: the one the report came from
-            boards = bds.discover(["qemu-x86_64=" + tmp])   # named here, not read off the folder
-            p, err = quiet(bds.build_payload, boards, args())
-            self.assertEqual([b["id"] for b in p["boards"]], ["qemu-x86_64"])
-            self.assertEqual(len(p["boards"][0]["runs"]), 14)
-            by = {b["name"]: b for b in p["benchmarks"]}
-            self.assertEqual(len(by), 10)
-            noisy = by["BM_TestA/2097152/repeats:5"]["s"]["qemu-x86_64"]["cv"]
-            self.assertTrue(all(c > 0.07 for c in noisy), "scaling repetitions together keeps the CV")
-            step = by[rfs.PLANT[0]]["s"]["qemu-x86_64"]["med"]
-            self.assertGreater(step[-1] / step[0], 1.12)
-            self.assertLess(step[8] / step[0], 1.03)
-            q = by["BM_TestA/8192/repeats:5"]["s"]["qemu-x86_64"]
-            self.assertEqual(q["iters"], 516208)
-            self.assertEqual(q["reps"], 5)
-            self.assertIn("bps", q)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        rfs.build(self.tmp, reports=14)                    # one board: the one the report came from
+        boards = bd.discover(["qemu-x86_64=" + self.tmp])   # named here, not read off the folder
+        p, err = quiet(bd.build_payload, boards, args())
+        self.assertEqual([b["id"] for b in p["boards"]], ["qemu-x86_64"])
+        self.assertEqual(len(p["boards"][0]["runs"]), 14)
+        by = {b["name"]: b for b in p["benchmarks"]}
+        self.assertEqual(len(by), 10)
+        noisy = by["BM_TestA/2097152/repeats:5"]["s"]["qemu-x86_64"]["cv"]
+        self.assertTrue(all(c > 0.07 for c in noisy), "scaling repetitions together keeps the CV")
+        step = by[rfs.PLANT[0]]["s"]["qemu-x86_64"]["med"]
+        self.assertGreater(step[-1] / step[0], 1.12)
+        self.assertLess(step[8] / step[0], 1.03)
+        q = by["BM_TestA/8192/repeats:5"]["s"]["qemu-x86_64"]
+        self.assertEqual(q["iters"], 516208)
+        self.assertEqual(q["reps"], 5)
+        self.assertIn("bps", q)
 
 
-class Config(unittest.TestCase):
-    """Work 2: bench-drift.toml holds how to read — days, metric, port,
-    groups — and never what to read. Arguments beat the file."""
-
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="bds-cfg-")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
+class Config(TempCase):
+    """bench-drift.toml holds how to read — days, metric, port, groups — and
+    never what to read. Arguments beat the file."""
 
     def toml(self, text):
         p = os.path.join(self.tmp, "bench-drift.toml")
@@ -729,87 +712,81 @@ class Config(unittest.TestCase):
         return p
 
     def test_reads_the_settings(self):
-        cfg = bds.load_config(self.toml('days = 30\nmetric = "real_time"\nport = 9000\n[groups]\nBM_A = "hashing"\n'))
+        cfg = bd.load_config(self.toml('days = 30\nmetric = "real_time"\nport = 9000\n[groups]\nBM_A = "hashing"\n'))
         self.assertEqual(cfg, {"days": 30, "metric": "real_time", "port": 9000, "groups": {"BM_A": "hashing"}})
 
     def test_boards_in_the_file_are_an_error(self):
         with self.assertRaises(SystemExit):
-            bds.load_config(self.toml('[boards]\nqemu = "runs/qemu"\n'))
+            bd.load_config(self.toml('[boards]\nqemu = "runs/qemu"\n'))
 
     def test_unknown_key_warns_and_is_ignored(self):
-        _, err = quiet(bds.load_config, self.toml('days = 5\nwhatever = 1\n'))
+        _, err = quiet(bd.load_config, self.toml('days = 5\nwhatever = 1\n'))
         self.assertIn("whatever", err)
 
     def test_missing_file_is_empty_when_default_and_an_error_when_named(self):
-        self.assertEqual(bds.load_config(os.path.join(self.tmp, "nope.toml"), required=False), {})
+        self.assertEqual(bd.load_config(os.path.join(self.tmp, "nope.toml"), required=False), {})
         with self.assertRaises(SystemExit):
-            bds.load_config(os.path.join(self.tmp, "nope.toml"), required=True)
+            bd.load_config(os.path.join(self.tmp, "nope.toml"), required=True)
 
     def test_arguments_beat_the_file_and_defaults_fill_the_rest(self):
         cfg = {"days": 30, "metric": "real_time", "port": 9000, "groups": {"BM_A": "x"}}
-        eff = bds.settings(cfg, argparse.Namespace(days=None, metric=None, port=None, groups=None))
+        eff = bd.settings(cfg, argparse.Namespace(days=None, metric=None, port=None, groups=None))
         self.assertEqual((eff.days, eff.metric, eff.port, eff.groups), (30, "real_time", 9000, {"BM_A": "x"}))
-        eff = bds.settings(cfg, argparse.Namespace(days=7, metric="cpu_time", port=None, groups=None))
+        eff = bd.settings(cfg, argparse.Namespace(days=7, metric="cpu_time", port=None, groups=None))
         self.assertEqual((eff.days, eff.metric, eff.port), (7, "cpu_time", 9000))
-        eff = bds.settings({}, argparse.Namespace(days=None, metric=None, port=None, groups=None))
+        eff = bd.settings({}, argparse.Namespace(days=None, metric=None, port=None, groups=None))
         self.assertEqual((eff.days, eff.metric, eff.port, eff.groups), (90, "cpu_time", 8777, {}))
 
     def test_days_is_a_setting_in_calendar_days(self):
         # default 90 days back from the newest report; the config sets it; an argument beats the config
-        self.assertEqual(bds.DEFAULTS["days"], 90)
-        self.assertEqual(bds.settings({}, argparse.Namespace()).days, 90)
-        self.assertEqual(bds.settings({"days": 14}, argparse.Namespace()).days, 14)
-        self.assertEqual(bds.settings({"days": 14}, argparse.Namespace(days=3)).days, 3)
+        self.assertEqual(bd.DEFAULTS["days"], 90)
+        self.assertEqual(bd.settings({}, argparse.Namespace()).days, 90)
+        self.assertEqual(bd.settings({"days": 14}, argparse.Namespace()).days, 14)
+        self.assertEqual(bd.settings({"days": 14}, argparse.Namespace(days=3)).days, 3)
 
 
-class Cli(unittest.TestCase):
-    """Work 2: one command. --board for the data, -o for a file or --serve
-    for a port, --config for the rest; neither -o nor --serve is an error."""
-
-    HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+class Cli(CorpusCase):
+    """One command: --board for the data, -o for a file or --serve for a
+    port, --config for the rest; neither -o nor --serve is an error."""
 
     def setUp(self):
-        self.c = Corpus()
+        super().setUp()
         for d in range(4):
             self.c.write("q", d, gb_rows("BM_A/1", [1.0, 1.0]) + gb_rows("BM_B/2", [3.0, 3.0]))
 
-    def tearDown(self):
-        self.c.cleanup()
-
     def run_cli(self, *argv):
-        import subprocess
-        # a hang is a failure, not a freeze: the old CLI served a port when
-        # given nothing to write, and a red test waited on it forever
+        # a hang is a failure, not a freeze: a CLI that serves a port when
+        # given nothing to write would keep a red test waiting forever
         try:
-            return subprocess.run([sys.executable, os.path.join(self.HERE, "bench-drift")] + list(argv),
-                                  capture_output=True, text=True, cwd=self.c.root, timeout=20)
+            return subprocess.run([sys.executable, os.path.join(ROOT, "bench-drift")] + list(argv),
+                                  capture_output=True, text=True, cwd=self.tmp, timeout=20)
         except subprocess.TimeoutExpired:
             self.fail("bench-drift did not exit in 20 s: %r" % (argv,))
 
     def test_writes_a_dashboard(self):
-        out = os.path.join(self.c.root, "d.html")
-        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.c.root, "q"), "-o", out)
+        out = os.path.join(self.tmp, "d.html")
+        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.tmp, "q"), "-o", out)
         self.assertEqual(r.returncode, 0, r.stderr)
         html = open(out, encoding="utf-8").read()
         self.assertIn("window.BENCH_DRIFT_DATA=", html)
         self.assertIn('"id":"qemu-x86_64"', html)
 
     def test_neither_output_nor_serve_is_an_error(self):
-        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.c.root, "q"))
+        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.tmp, "q"))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("-o", r.stderr); self.assertIn("--serve", r.stderr)
 
     def test_config_is_read_and_arguments_beat_it(self):
-        cfg = os.path.join(self.c.root, "bench-drift.toml")
+        cfg = os.path.join(self.tmp, "bench-drift.toml")
         with open(cfg, "w") as fh:
             fh.write('days = 2\n[groups]\nBM_A = "hashing"\n')
-        out = os.path.join(self.c.root, "p.json")
-        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.c.root, "q"), "--dump", out)   # bench-drift.toml next to us is picked up
+        out = os.path.join(self.tmp, "p.json")
+        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.tmp, "q"), "--dump", out)   # bench-drift.toml next to us is picked up
         self.assertEqual(r.returncode, 0, r.stderr)
         p = json.load(open(out))
         self.assertEqual(len(p["boards"][0]["runs"]), 2)
         self.assertEqual({b["fam"]: b["group"] for b in p["benchmarks"]}["BM_A"], "hashing")
-        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.c.root, "q"), "--dump", out, "--days", "3")
+        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.tmp, "q"), "--dump", out, "--days", "3")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(len(json.load(open(out))["boards"][0]["runs"]), 3)
 
@@ -824,27 +801,26 @@ class Cli(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), "bench-drift 0.1.0")
 
     def test_module_runs_as_python_m(self):
-        import subprocess
         r = subprocess.run([sys.executable, "-m", "bench_drift", "--help"],
-                           capture_output=True, text=True, cwd=self.HERE, timeout=20)
+                           capture_output=True, text=True, cwd=ROOT, timeout=20)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("--board", r.stdout)
 
     def test_page_is_found_next_to_the_module(self):
         # no --page: the fragment ships inside the package, wherever it is installed
-        page = bds.default_page()
+        page = bd.default_page()
         self.assertTrue(os.path.isfile(page), page)
-        self.assertEqual(os.path.dirname(page), os.path.dirname(os.path.abspath(bds.__file__)))
-        out = os.path.join(self.c.root, "d.html")
-        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.c.root, "q"), "-o", out)
+        self.assertEqual(os.path.dirname(page), os.path.dirname(os.path.abspath(bd.__file__)))
+        out = os.path.join(self.tmp, "d.html")
+        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.tmp, "q"), "-o", out)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("<title>bench-drift</title>", open(out, encoding="utf-8").read())
 
     def test_boards_in_config_refused_with_a_hint(self):
-        cfg = os.path.join(self.c.root, "bench-drift.toml")
+        cfg = os.path.join(self.tmp, "bench-drift.toml")
         with open(cfg, "w") as fh:
             fh.write('[boards]\nqemu = "q"\n')
-        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.c.root, "q"), "--dump", os.path.join(self.c.root, "p.json"))
+        r = self.run_cli("--board", "qemu-x86_64=" + os.path.join(self.tmp, "q"), "--dump", os.path.join(self.tmp, "p.json"))
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("--board", r.stderr)
 
@@ -854,22 +830,21 @@ class Serve(unittest.TestCase):
         from http.server import ThreadingHTTPServer
         from urllib.request import urlopen
         import threading
-        bds.Handler.page = b"<!doctype html>"
-        bds.Handler.payload = b"{}"
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), bds.Handler)
+        bd.Handler.page = b"<!doctype html>"
+        bd.Handler.payload = b"{}"
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), bd.Handler)
         httpd.verbose = False
         t = threading.Thread(target=httpd.serve_forever, daemon=True); t.start()
         try:
             with urlopen("http://127.0.0.1:%d/" % httpd.server_address[1], timeout=5) as r:
-                self.assertEqual(r.headers["Server"], "bench-drift/0.1.0")
-                self.assertEqual(r.headers["Server"], "bench-drift/" + bds.__version__)
+                self.assertEqual(r.headers["Server"], "bench-drift/" + bd.__version__)
         finally:
             httpd.shutdown(); httpd.server_close()
 
 
 class BuildPage(unittest.TestCase):
     def test_skeleton_and_injection(self):
-        html = bds.build_page(bds.default_page(), {"x": "</script><b>"}).decode("utf-8")
+        html = bd.build_page(bd.default_page(), {"x": "</script><b>"}).decode("utf-8")
         self.assertTrue(html.startswith("<!doctype html>"))
         self.assertIn("[hidden]{ display:none !important; }", html)
         self.assertLess(html.index("BENCH_DRIFT_DATA"), html.index("(function(){"))
@@ -880,10 +855,10 @@ class BuildPage(unittest.TestCase):
 class Helpers(unittest.TestCase):
     def test_display_path(self):
         cwd = os.getcwd()
-        self.assertEqual(bds.display_path(os.path.join(cwd, "a", "b.json")), os.path.join("a", "b.json"))
+        self.assertEqual(bd.display_path(os.path.join(cwd, "a", "b.json")), os.path.join("a", "b.json"))
         up = os.path.abspath(os.path.join(cwd, "..", "z.json"))
-        self.assertEqual(bds.display_path(up), up)
-        self.assertEqual(bds.display_path(""), "")
+        self.assertEqual(bd.display_path(up), up)
+        self.assertEqual(bd.display_path(""), "")
 
 
 if __name__ == "__main__":
